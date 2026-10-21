@@ -60,6 +60,39 @@ describe('prepare', () => {
   });
 });
 
+describe('prepare hiding regressions', () => {
+  it('ends a line comment at a lone CR', () => {
+    expect(prepare('SELECT 1 -- c\rDELETE FROM t').stripped).toBe('SELECT 1 \rDELETE FROM t');
+  });
+
+  it('ends a line comment at CRLF', () => {
+    expect(prepare('SELECT 1 -- c\r\nDELETE FROM t').stripped).toBe('SELECT 1 \r\nDELETE FROM t');
+  });
+
+  it('handles empty input', () => {
+    expect(prepare('')).toEqual({ raw: '', noComments: '', stripped: '' });
+  });
+
+  it('keeps the body of a MySQL executable comment', () => {
+    const p = prepare('SELECT 1 /*! DROP TABLE t */');
+    expect(p.noComments).toContain('DROP TABLE t');
+    expect(p.stripped).toContain('DROP TABLE t');
+  });
+
+  it('keeps version digits and still strips strings in an executable comment', () => {
+    const p = prepare("/*!50000 DELETE FROM t WHERE a = 'x' */");
+    expect(p.stripped).toContain('DELETE FROM t');
+    expect(p.stripped).toContain("a = ''");
+  });
+
+  it('does not treat -- as a comment unless followed by whitespace or end', () => {
+    expect(prepare('SELECT 1 --;DROP TABLE t\n').stripped).toContain('DROP TABLE t');
+    expect(prepare('SELECT 1 -- ;DROP TABLE t\n').stripped).not.toContain('DROP');
+    expect(prepare('SELECT 1 --').stripped).toBe('SELECT 1 ');
+    expect(prepare('SELECT 1 --\tx').stripped).toBe('SELECT 1 ');
+  });
+});
+
 describe('splitStatements', () => {
   it('splits statements and drops empties', () => {
     expect(splitStatements(' SELECT 1 ;; UPDATE t SET a = 1 ; ')).toEqual([
@@ -81,5 +114,14 @@ describe('hasTopLevelWhere', () => {
 
   it('does not match WHERE as part of another word', () => {
     expect(hasTopLevelWhere('SELECT somewhere, where_x FROM t')).toBe(false);
+  });
+
+  it('ignores WHERE inside a dollar-quoted body', () => {
+    expect(hasTopLevelWhere(prepare('UPDATE t SET note = $$ where $$').stripped)).toBe(false);
+    expect(hasTopLevelWhere(prepare('UPDATE t SET note = $tag$ where $tag$').stripped)).toBe(false);
+  });
+
+  it('still finds a real WHERE after a dollar-quoted body', () => {
+    expect(hasTopLevelWhere(prepare('UPDATE t SET note = $$ x $$ WHERE id = 1').stripped)).toBe(true);
   });
 });

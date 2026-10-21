@@ -47,15 +47,28 @@ export function prepare(sql: string): PreparedSql {
     const next = sql[i + 1];
 
     if (c === '-' && next === '-') {
-      // Line comment ends at the newline (kept) or at end of input.
-      const nl = sql.indexOf('\n', i);
-      i = nl === -1 ? sql.length : nl;
+      const after = sql[i + 2];
+      if (after === undefined || after.charCodeAt(0) <= 32) {
+        // Line comment ends at the first CR or LF (kept) or at end of input.
+        const m = /[\r\n]/.exec(sql.slice(i));
+        i = m ? i + m.index : sql.length;
+      } else {
+        // MySQL: `--` without trailing whitespace is not a comment. Keep it visible.
+        emit('--');
+        i += 2;
+      }
     } else if (c === '/' && next === '*') {
       const close = sql.indexOf('*/', i + 2);
       if (close === -1) {
         // Unterminated: keep the rest as is.
         emit(sql.slice(i));
         i = sql.length;
+      } else if (sql[i + 2] === '!') {
+        // MySQL executes `/*! ... */`, so keep the inner text.
+        const inner = prepare(sql.slice(i + 3, close));
+        noComments += ' ' + inner.noComments + ' ';
+        stripped += ' ' + inner.stripped + ' ';
+        i = close + 2;
       } else {
         i = close + 2;
       }
@@ -95,6 +108,7 @@ export function splitStatements(stripped: string): string[] {
     .filter((s) => s.length > 0);
 }
 
+// Expects `stripped` input from prepare().
 export function hasTopLevelWhere(statement: string): boolean {
   let depth = 0;
   let i = 0;
@@ -103,6 +117,8 @@ export function hasTopLevelWhere(statement: string): boolean {
     if (c === '"' || c === '`') {
       const end = endOfQuoted(statement, i);
       i = end === -1 ? i + 1 : end;
+    } else if (c === '$' && endOfDollarQuoted(statement, i) !== -1) {
+      i = endOfDollarQuoted(statement, i);
     } else if (c === '(') {
       depth++;
       i++;
