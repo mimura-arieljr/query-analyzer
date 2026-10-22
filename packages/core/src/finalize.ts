@@ -104,6 +104,8 @@ const PERCENT_TAIL = /["']\s*%\s*(?:[\w.]+|\([^()]*\))\s*;?\s*$/;
 // Placeholders in a rewrite, each replaced by one `?`.
 const PLACEHOLDER = /'?(?:\$\d+|\?|%s|%\(\w+\)s|(?<!:):\w+|@\w+)'?/g;
 const CALL_OPEN = /^[\w.]+\(\s*(?=["'`])/;
+// Comments and escapes can hide text once whitespace is collapsed, so they are not compared.
+const COMMENT_OR_ESCAPE = /--|#|\/\*|\\/;
 const SQL_START = /^(?:SELECT|INSERT|UPDATE|DELETE|WITH|REPLACE|MERGE)\b/i;
 
 // `db.query("...")` becomes `"..."`, only when it is one balanced call and nothing follows it but `;`.
@@ -147,6 +149,7 @@ function skeleton(text: string, original: boolean): string {
 function isParameterized(query: string, rewrite: string, rewriteHits: RuleHit[]): boolean {
   if (hasHit(rewriteHits, 'string-built-sql') || rank(floor(rewriteHits, 'danger')) >= rank('high')) return false;
   if (!SQL_START.test(rewrite.trim())) return false;
+  if (COMMENT_OR_ESCAPE.test(query) || COMMENT_OR_ESCAPE.test(rewrite)) return false;
   const want = skeleton(query, true);
   return want !== '' && want === skeleton(rewrite, false);
 }

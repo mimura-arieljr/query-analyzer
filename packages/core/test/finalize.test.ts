@@ -266,6 +266,30 @@ describe('finalize: rewrite guard for string-built SQL', () => {
     expect(rewriteOf(original, 'UPDATE users SET name = %s')).toEqual(CLEARED);
   });
 
+  it('drops a rewrite that comments out the rest of the statement after a newline', () => {
+    const original = "`UPDATE users SET name = '${n}' WHERE id = 1 -- this user\nAND tenant = 5`";
+    const rewrite = 'UPDATE users SET name = $1 WHERE id = 1 -- this user AND tenant = 5';
+    expect(rewriteOf(original, rewrite)).toEqual(CLEARED);
+  });
+
+  it('drops a rewrite that copies a backslash-n escape into a comment', () => {
+    const original = String.raw`"UPDATE users SET name = '" + n + "' WHERE id = 1 -- this user\nAND tenant = 5"`;
+    const rewrite = String.raw`UPDATE users SET name = $1 WHERE id = 1 -- this user\nAND tenant = 5`;
+    expect(rewriteOf(original, rewrite)).toEqual(CLEARED);
+  });
+
+  it.each(['UPDATE users SET name = $1 WHERE id = 1 # note', 'UPDATE users SET name = $1 WHERE id = 1 /* note */'])(
+    'drops a rewrite containing a comment marker: %s',
+    (rewrite) => {
+      expect(rewriteOf(UPDATE_Q, rewrite)).toEqual(CLEARED);
+    },
+  );
+
+  it('drops a rewrite when the original contains a backslash', () => {
+    const original = String.raw`"UPDATE users SET name = '" + n + "' WHERE path = 'a\\b'"`;
+    expect(rewriteOf(original, String.raw`UPDATE users SET name = $1 WHERE path = 'a\\b'`)).toEqual(CLEARED);
+  });
+
   it('drops a rewrite that has a high danger rule hit even if its shape matches', () => {
     const original = `"DELETE FROM users WHERE id = " + id + " OR 1=1"`;
     expect(rewriteOf(original, 'DELETE FROM users WHERE id = $1 OR 1=1')).toEqual(CLEARED);
