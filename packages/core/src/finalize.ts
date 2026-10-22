@@ -83,22 +83,66 @@ function raiseEmptyLevel<T extends CategoryResult<FinalFinding>>(c: T): T {
 
 const NO_REWRITE: RewrittenQuery = { query: '', reason: '' };
 
-function dangerFloor(hits: RuleHit[]): Level {
-  return hits.filter((h) => h.category === 'danger').reduce<Level>((acc, h) => maxLevel(acc, h.level), 'none');
+function floor(hits: RuleHit[], category: Category): Level {
+  return hits.filter((h) => h.category === category).reduce<Level>((acc, h) => maxLevel(acc, h.level), 'none');
 }
 
 const hasHit = (hits: RuleHit[], id: RuleHit['id']) => hits.some((h) => h.id === id);
+
+const EXPR = String.raw`[^"'\`+]+?`;
+// Joins in a string-built original, each replaced by one `?`.
+const JOINS: RegExp[] = [
+  new RegExp(String.raw`'["\`]\s*\+\s*${EXPR}\s*\+\s*["\`]'`, 'g'),
+  new RegExp(String.raw`["\`]\s*\+\s*${EXPR}\s*\+\s*["\`]`, 'g'),
+  new RegExp(String.raw`["\`]\s*\+\s*[^"'\`+]+$`, 'g'),
+  /'?\$\{[^}]*\}'?/g,
+  /'?%(?:\(\w+\))?s'?/g,
+  /'?\{[^{}]*\}'?/g,
+];
+// The `" % value` after a Python format string.
+const PERCENT_TAIL = /["']\s*%\s*[\w([{].*$/;
+// Placeholders in a rewrite, each replaced by one `?`.
+const PLACEHOLDER = /'?(?:\$\d+|\?|%s|%\(\w+\)s|(?<!:):\w+|@\w+)'?/g;
+// db.query(" ... ", [args]) around a statement.
+const CALL_OPEN = /^[\w.]+\(\s*(?=["'`])/;
+const CALL_CLOSE = /(?:,\s*[[({].*)?\)\s*;?\s*$/;
+
+// The statement with values and quoting removed, so a string-built query and
+// its parameterized rewrite can be compared for the same shape.
+function skeleton(text: string, original: boolean): string {
+  let t = text.trim().toLowerCase();
+  if (CALL_OPEN.test(t)) t = t.replace(CALL_OPEN, '').replace(CALL_CLOSE, '');
+  if (original) {
+    t = t.replace(/^f(?=["'])/, '');
+    for (const re of JOINS) t = t.replace(re, '?');
+    t = t.replace(PERCENT_TAIL, '');
+  } else {
+    t = t.replace(PLACEHOLDER, '?');
+  }
+  return t
+    .replace(/^[\s"'`]+/, '')
+    .replace(/[\s"'`;]+$/, '')
+    .replace(/\s+/g, ' ');
+}
+
+// For a string-built original, keep only a rewrite that is the same statement with parameters.
+function isParameterized(query: string, rewrite: string, rewriteHits: RuleHit[]): boolean {
+  if (hasHit(rewriteHits, 'string-built-sql')) return false;
+  const want = skeleton(query, true);
+  return want !== '' && want === skeleton(rewrite, false);
+}
 
 function guardRewrite(query: string, model: ModelAnalysis, hits: RuleHit[]): RewrittenQuery {
   const rewrite = model.rewritten_query;
   const text = rewrite.query.trim();
   if (text === '' || text === query.trim() || rewrite.reason.trim() === '') return NO_REWRITE;
   const rewriteHits = runRules(rewrite.query);
-  if (rank(dangerFloor(rewriteHits)) > rank(dangerFloor(hits))) return NO_REWRITE;
+  if (hasHit(hits, 'string-built-sql')) return isParameterized(query, rewrite.query, rewriteHits) ? rewrite : NO_REWRITE;
+  const worse = (c: Category) => rank(floor(rewriteHits, c)) > rank(floor(hits, c));
+  if (worse('danger') || worse('security')) return NO_REWRITE;
   const changesData =
     hits.some((h) => h.changesData) || model.danger.can_change_data === 'yes' || model.danger.can_change_data === 'unclear';
-  const parameterized = hasHit(hits, 'string-built-sql') && !hasHit(rewriteHits, 'string-built-sql');
-  return changesData && !parameterized ? NO_REWRITE : rewrite;
+  return changesData ? NO_REWRITE : rewrite;
 }
 
 // Rules only raise warnings. The one exception is a Logs Insights query, which is read-only.

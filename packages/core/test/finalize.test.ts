@@ -186,6 +186,68 @@ describe('finalize: rewrite guard', () => {
   });
 });
 
+describe('finalize: rewrite guard for string-built SQL', () => {
+  const rewriteOf = (original: string, rewrite: string, change: 'yes' | 'no' = 'yes') => {
+    const model = baseAnalysis();
+    model.danger.can_change_data = change;
+    model.rewritten_query = { query: rewrite, reason: 'Uses a parameter.' };
+    return finalize(original, model).rewritten_query;
+  };
+  const KEPT = (rewrite: string) => ({ query: rewrite, reason: 'Uses a parameter.' });
+  const CLEARED = { query: '', reason: '' };
+
+  const UPDATE_Q = `"UPDATE users SET name = '" + n + "' WHERE id = 1"`;
+  const UPDATE_BARE = `UPDATE users SET name = '" + n + "' WHERE id = 1`;
+  const UPDATE_P = 'UPDATE users SET name = $1 WHERE id = 1';
+
+  it('keeps a parameterized rewrite of a quoted string-built UPDATE', () => {
+    expect(rewriteOf(UPDATE_Q, UPDATE_P)).toEqual(KEPT(UPDATE_P));
+  });
+
+  it('keeps a parameterized rewrite of a string-built DELETE', () => {
+    const rewrite = 'DELETE FROM users WHERE id = $1';
+    expect(rewriteOf(`"DELETE FROM users WHERE id = " + id`, rewrite)).toEqual(KEPT(rewrite));
+  });
+
+  it('keeps a parameterized rewrite of a template-literal UPDATE', () => {
+    expect(rewriteOf('`UPDATE users SET name = \'${n}\' WHERE id = 1`', UPDATE_P)).toEqual(KEPT(UPDATE_P));
+  });
+
+  it('keeps a parameterized rewrite of a Python %-formatted UPDATE', () => {
+    expect(rewriteOf(`"UPDATE users SET name = '%s' WHERE id = 1" % name`, 'UPDATE users SET name = %s WHERE id = 1')).toEqual(
+      KEPT('UPDATE users SET name = %s WHERE id = 1'),
+    );
+  });
+
+  it('keeps a parameterized rewrite wrapped in a db.query call', () => {
+    const original = `db.query("UPDATE users SET name = '" + n + "' WHERE id = 1")`;
+    const rewrite = 'db.query("UPDATE users SET name = $1 WHERE id = 1", [n])';
+    expect(rewriteOf(original, rewrite)).toEqual(KEPT(rewrite));
+  });
+
+  it('keeps a parameterized rewrite of a SELECT the model said does not change data', () => {
+    const rewrite = 'SELECT * FROM users WHERE name = $1';
+    expect(rewriteOf(STRING_BUILT, rewrite, 'no')).toEqual(KEPT(rewrite));
+  });
+
+  it('drops a rewrite that swaps a string-built UPDATE for a DELETE', () => {
+    expect(rewriteOf(UPDATE_BARE, 'DELETE FROM users WHERE id = $1')).toEqual(CLEARED);
+  });
+
+  it('drops a rewrite that updates a different table', () => {
+    expect(rewriteOf(UPDATE_BARE, 'UPDATE accounts SET balance = 0 WHERE id = $1')).toEqual(CLEARED);
+  });
+
+  it('drops a rewrite that widens the WHERE of a string-built UPDATE', () => {
+    expect(rewriteOf(UPDATE_BARE, 'UPDATE users SET name = $1 WHERE id > 0')).toEqual(CLEARED);
+  });
+
+  it('drops a rewrite that adds SQL injection to a parameterized query', () => {
+    const original = 'SELECT * FROM users WHERE name = $1';
+    expect(rewriteOf(original, `"SELECT * FROM users WHERE name = '" + name + "'"`, 'no')).toEqual(CLEARED);
+  });
+});
+
 describe('finalize: logs insights, levels and pass-through', () => {
   it('Logs Insights query is forced to danger none even if the model said high', () => {
     const model = baseAnalysis();
