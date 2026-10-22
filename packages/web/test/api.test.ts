@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import { analyze, checkSecret, sha256Hex } from '../src/api';
 
@@ -57,6 +58,30 @@ describe('analyze', () => {
     const fetchImpl = vi.fn(async () => new Response('<html>bad gateway</html>', { status: 502 }));
     expect(await analyze('q', 's', fetchImpl as unknown as typeof fetch)).toEqual(FAILED);
   });
+
+  it('hashes the exact UTF-8 bytes of a non-ASCII body', async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse(200, { ok: true, analysis: {} }));
+    const query = "SELECT '😀 日本語' AS greeting";
+    await analyze(query, 's', fetchImpl as unknown as typeof fetch);
+    const [, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
+    const expected = createHash('sha256').update(init.body as string, 'utf8').digest('hex');
+    expect((init.headers as Record<string, string>)['x-amz-content-sha256']).toBe(expected);
+    expect(init.body).toContain('😀 日本語');
+  });
+
+  it('maps ok:true without an analysis object to failed', async () => {
+    for (const body of [{ ok: true }, { ok: true, analysis: 'x' }, { ok: true, analysis: null }]) {
+      const fetchImpl = vi.fn(async () => jsonResponse(200, body));
+      expect(await analyze('q', 's', fetchImpl as unknown as typeof fetch)).toEqual(FAILED);
+    }
+  });
+
+  it('maps ok:false without string error and message to failed', async () => {
+    for (const body of [{ ok: false }, { ok: false, error: 1, message: 'm' }, { ok: false, error: 'e' }]) {
+      const fetchImpl = vi.fn(async () => jsonResponse(400, body));
+      expect(await analyze('q', 's', fetchImpl as unknown as typeof fetch)).toEqual(FAILED);
+    }
+  });
 });
 
 describe('checkSecret', () => {
@@ -78,6 +103,7 @@ describe('checkSecret', () => {
     await checkSecret('s3cret', fetchImpl as unknown as typeof fetch);
     const [url, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe('/api/check');
+    expect(init.cache).toBe('no-store');
     expect((init.headers as Record<string, string>)['x-app-secret']).toBe('s3cret');
   });
-});
+})
