@@ -28,8 +28,14 @@ function endOfQuoted(sql: string, i: number, backslash = false): number {
   return -1;
 }
 
+// True when the quote at `i` opens a PostgreSQL E'...' string, where a backslash escapes.
+export function isEscapeString(sql: string, i: number): boolean {
+  const prefix = sql[i - 1];
+  return (prefix === 'e' || prefix === 'E') && !(i >= 2 && IDENT_CHAR.test(sql[i - 2]));
+}
+
 // Index just past a closing dollar tag, or -1 if there is no tag here or no closer.
-function endOfDollarQuoted(sql: string, i: number): number {
+export function endOfDollarQuoted(sql: string, i: number): number {
   if (i > 0 && IDENT_CHAR.test(sql[i - 1])) return -1;
   const tag = DOLLAR_TAG.exec(sql.slice(i, i + 64))?.[0];
   if (!tag) return -1;
@@ -58,7 +64,7 @@ function endOfNestedComment(sql: string, i: number): number {
 
 // Dialect picks how ambiguous syntax is read:
 // - mysql: `#` comments, backslash escapes, non-nesting comments, `/*!` runs its text.
-// - postgresql: `--` always comments, nested comments, no backslash escapes.
+// - postgresql: `--` always comments, nested comments, backslash escapes only in E'...'.
 export type Dialect = 'mysql' | 'postgresql';
 
 export function prepare(sql: string, dialect: Dialect = 'mysql'): PreparedSql {
@@ -109,7 +115,7 @@ export function prepare(sql: string, dialect: Dialect = 'mysql'): PreparedSql {
         i = close + 2;
       }
     } else if (c === "'") {
-      const end = endOfQuoted(sql, i, my);
+      const end = endOfQuoted(sql, i, my || isEscapeString(sql, i));
       if (end === -1) {
         emit(sql.slice(i));
         i = sql.length;

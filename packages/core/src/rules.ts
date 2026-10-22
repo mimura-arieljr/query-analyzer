@@ -1,4 +1,4 @@
-import { hasTopLevelWhere, prepare, splitStatements } from './text';
+import { endOfDollarQuoted, hasTopLevelWhere, isEscapeString, prepare, splitStatements } from './text';
 import type { Dialect, PreparedSql } from './text';
 import type { Category, Certainty, Level } from './types';
 
@@ -81,7 +81,7 @@ function splitNoComments(text: string, dialect: Dialect): string[] {
     let end = -1;
     let hides = false;
     if (c === "'") {
-      end = quoteEnd(i, backslash);
+      end = quoteEnd(i, backslash || isEscapeString(text, i));
       hides = true;
       if (end === -1) end = text.length;
     } else if (c === '"') {
@@ -126,6 +126,8 @@ function topLevelWords(statement: string): Word[] {
     if (c === '"' || c === '`') {
       const close = statement.indexOf(c, i + 1);
       i = close === -1 ? i + 1 : close + 1;
+    } else if (c === '$' && endOfDollarQuoted(statement, i) !== -1) {
+      i = endOfDollarQuoted(statement, i);
     } else if (c === '(') {
       depth++;
       i++;
@@ -405,29 +407,34 @@ function peelPlpgsql(text: string): string {
 }
 
 function statementsOf(p: PreparedSql, dialect: Dialect): Stmt[] {
-  const stripped = splitStatements(p.stripped);
+  const pieces = splitStatements(p.stripped);
   const plain = splitNoComments(p.noComments, dialect);
-  const aligned = plain.length === stripped.length;
+  const aligned = plain.length === pieces.length;
   const out: Stmt[] = [];
-  // Tag of the DO body being read; its `;`-separated parts are statements.
-  let doTag: string | null = null;
-  stripped.forEach((piece, i) => {
-    let text = piece;
-    if (doTag !== null) {
-      if (text.includes(doTag)) doTag = null;
-      text = peelPlpgsql(text);
-    } else {
-      const open = DO_OPEN.exec(text);
-      if (open) {
-        const rest = text.slice(open[0].length);
-        if (!rest.includes(open[1])) doTag = open[1];
-        text = peelPlpgsql(rest);
-      }
+  // On a split mismatch use the whole text: a spurious warning beats a missed one.
+  const push = (text: string, noComments: string) => {
+    const t = peelPrefixes(text);
+    out.push({ stripped: t, noComments, kind: kindOf(t) });
+  };
+  for (let i = 0; i < pieces.length; i++) {
+    const open = DO_OPEN.exec(pieces[i]);
+    if (!open) {
+      push(pieces[i], aligned ? plain[i] : p.noComments);
+      continue;
     }
-    text = peelPrefixes(text);
-    // On a split mismatch use the whole text: a spurious warning beats a missed one.
-    out.push({ stripped: text, noComments: aligned ? plain[i] : p.noComments, kind: kindOf(text) });
-  });
+    // A DO body was split at its own `;`: join it back, then read it as SQL text of its own.
+    const tag = open[1];
+    const parts = [pieces[i].slice(open[0].length)];
+    while (!parts[parts.length - 1].includes(tag) && i + 1 < pieces.length) parts.push(pieces[++i]);
+    const joined = parts.join(';');
+    const closeAt = joined.indexOf(tag);
+    const body = prepare(closeAt === -1 ? joined : joined.slice(0, closeAt), dialect);
+    const inner = splitStatements(body.stripped);
+    const innerPlain = splitNoComments(body.noComments, dialect);
+    inner.forEach((text, k) => {
+      push(peelPlpgsql(text), innerPlain.length === inner.length ? innerPlain[k] : body.noComments);
+    });
+  }
   return out;
 }
 

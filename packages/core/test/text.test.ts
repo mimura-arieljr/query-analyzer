@@ -160,3 +160,16 @@ describe('prepare dialects', () => {
     expect(prepare('A /*! B */ C', 'postgresql').stripped).toBe('A  C');
   });
 });
+
+describe('prepare E-strings', () => {
+  it("postgresql: a backslash escapes only inside E'...'", () => {
+    expect(prepare("SELECT E'\\'' , 1", 'postgresql').stripped).toBe("SELECT E'' , 1");
+    expect(prepare("SELECT 'b\\' , 1", 'postgresql').stripped).toBe("SELECT '' , 1");
+  });
+
+  it('an E at the end of a longer word is not an E-string prefix', () => {
+    expect(prepare("SELECT CASE WHEN a THEN 'x' ELSE'b\\' END", 'postgresql').stripped).toBe(
+      "SELECT CASE WHEN a THEN '' ELSE'' END",
+    );
+  });
+});

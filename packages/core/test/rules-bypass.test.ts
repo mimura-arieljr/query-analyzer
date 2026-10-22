@@ -190,3 +190,55 @@ describe('review finding 6: REPLACE INTO and MERGE', () => {
     expect(hit?.matchesModel.test('This MERGE can delete rows')).toBe(true);
   });
 });
+
+describe('review round 2, item 1: DO bodies are prepared before splitting', () => {
+  it('a line comment in the body does not hide the statement', () => {
+    expect(has('DO $$ BEGIN -- note\nDELETE FROM t; END $$', 'delete-update-no-where', 'high')).toBe(true);
+  });
+
+  it('a block comment in the body does not hide the statement', () => {
+    expect(has('DO $$ BEGIN /* c */ DELETE FROM t; END $$', 'delete-update-no-where', 'high')).toBe(true);
+  });
+
+  it('a string in the body does not fake a WHERE', () => {
+    expect(has("DO $$ BEGIN UPDATE t SET note = 'where'; END $$", 'delete-update-no-where', 'high')).toBe(true);
+  });
+
+  it('a WHERE inside a comment in the body does not count', () => {
+    expect(has('DO $$ BEGIN DELETE FROM t -- WHERE id = 1\n; END $$', 'delete-update-no-where', 'high')).toBe(true);
+  });
+
+  it('statements after the body are still checked, and a body without writes is silent', () => {
+    expect(ids('DO $$ BEGIN PERFORM 1; END $$; DELETE FROM u')).toEqual(['delete-update-no-where']);
+    expect(runRules('DO $$ BEGIN -- DELETE FROM t\nPERFORM 1; END $$')).toEqual([]);
+  });
+});
+
+describe('review round 2, item 2: PostgreSQL E-strings', () => {
+  it("E'\\'' is one complete string in PostgreSQL", () => {
+    expect(has("SELECT E'\\'', 'b\\'; DELETE FROM t; -- '", 'delete-update-no-where', 'high')).toBe(true);
+    expect(has("SELECT length(E'\\'') # 1; DELETE FROM t; -- '", 'delete-update-no-where', 'high')).toBe(true);
+  });
+
+  it('simpler E-string forms are still caught', () => {
+    expect(has("SELECT E'\\''; DELETE FROM t; -- '", 'delete-update-no-where', 'high')).toBe(true);
+    expect(has("SELECT e'a\\'b'; DELETE FROM t", 'delete-update-no-where')).toBe(true);
+  });
+});
+
+describe('review round 2, item 3: dollar-quoted spans in the WHERE scan', () => {
+  it('a dollar-quoted WHERE word is not the clause', () => {
+    for (const q of [
+      'UPDATE t SET a = $$ where $$ WHERE 1=1',
+      'UPDATE t SET a = $$where$$ WHERE 1=1',
+      'UPDATE t SET a = $tag$ where $tag$ WHERE 1=1',
+    ]) {
+      expect(has(q, 'always-true-where', 'high'), q).toBe(true);
+    }
+  });
+
+  it('a dollar-quoted WHERE is not a real one', () => {
+    expect(has('UPDATE t SET a = $tag$ where $tag$', 'delete-update-no-where', 'high')).toBe(true);
+    expect(ids('UPDATE t SET a = $$ where $$ WHERE id = 5')).toEqual(['delete-update-with-where']);
+  });
+});
