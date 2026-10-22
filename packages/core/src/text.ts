@@ -8,10 +8,14 @@ const IDENT_CHAR = /[A-Za-z0-9_$]/;
 const DOLLAR_TAG = /^\$(?:[A-Za-z_][A-Za-z0-9_]*)?\$/;
 
 // Index just past the closing quote, or -1 if unterminated. `i` is the opening quote.
-function endOfQuoted(sql: string, i: number): number {
+function endOfQuoted(sql: string, i: number, backslash = false): number {
   const q = sql[i];
   let j = i + 1;
   while (j < sql.length) {
+    if (backslash && sql[j] === '\\') {
+      j += 2;
+      continue;
+    }
     if (sql[j] === q) {
       if (sql[j + 1] === q) {
         j += 2;
@@ -33,7 +37,32 @@ function endOfDollarQuoted(sql: string, i: number): number {
   return close === -1 ? -1 : close + tag.length;
 }
 
-export function prepare(sql: string): PreparedSql {
+// Index of the `*/` that closes a nested comment opened at `i`, or -1.
+function endOfNestedComment(sql: string, i: number): number {
+  let depth = 0;
+  let j = i;
+  while (j < sql.length - 1) {
+    if (sql[j] === '/' && sql[j + 1] === '*') {
+      depth++;
+      j += 2;
+    } else if (sql[j] === '*' && sql[j + 1] === '/') {
+      depth--;
+      if (depth === 0) return j;
+      j += 2;
+    } else {
+      j++;
+    }
+  }
+  return -1;
+}
+
+// Dialect picks how ambiguous syntax is read:
+// - mysql: `#` comments, backslash escapes, non-nesting comments, `/*!` runs its text.
+// - postgresql: `--` always comments, nested comments, no backslash escapes.
+export type Dialect = 'mysql' | 'postgresql';
+
+export function prepare(sql: string, dialect: Dialect = 'mysql'): PreparedSql {
+  const my = dialect === 'mysql';
   let noComments = '';
   let stripped = '';
   const emit = (both: string, onlyNoComments?: string) => {
@@ -48,7 +77,7 @@ export function prepare(sql: string): PreparedSql {
 
     if (c === '-' && next === '-') {
       const after = sql[i + 2];
-      if (after === undefined || after.charCodeAt(0) <= 32) {
+      if (!my || after === undefined || after.charCodeAt(0) <= 32) {
         // Line comment ends at the first CR or LF (kept) or at end of input.
         const m = /[\r\n]/.exec(sql.slice(i));
         i = m ? i + m.index : sql.length;
@@ -57,15 +86,18 @@ export function prepare(sql: string): PreparedSql {
         emit('--');
         i += 2;
       }
+    } else if (my && c === '#') {
+      const m = /[\r\n]/.exec(sql.slice(i));
+      i = m ? i + m.index : sql.length;
     } else if (c === '/' && next === '*') {
-      const close = sql.indexOf('*/', i + 2);
+      const close = my ? sql.indexOf('*/', i + 2) : endOfNestedComment(sql, i);
       if (close === -1) {
         // Unterminated: keep the rest as is.
         emit(sql.slice(i));
         i = sql.length;
-      } else if (sql[i + 2] === '!') {
-        // MySQL executes `/*! ... */`, so keep the inner text.
-        const inner = prepare(sql.slice(i + 3, close));
+      } else if (my && sql[i + 2] === '!') {
+        // MySQL executes `/*! ... */` (optionally `/*!50000 ... */`), so keep the inner text.
+        const inner = prepare(sql.slice(i + 3, close).replace(/^\d+/, ''), dialect);
         noComments += ' ' + inner.noComments + ' ';
         stripped += ' ' + inner.stripped + ' ';
         i = close + 2;
@@ -77,7 +109,7 @@ export function prepare(sql: string): PreparedSql {
         i = close + 2;
       }
     } else if (c === "'") {
-      const end = endOfQuoted(sql, i);
+      const end = endOfQuoted(sql, i, my);
       if (end === -1) {
         emit(sql.slice(i));
         i = sql.length;
@@ -87,7 +119,7 @@ export function prepare(sql: string): PreparedSql {
       }
     } else if (c === '"' || c === '`') {
       // Quoted identifiers pass through so markers inside them are not misread.
-      const end = endOfQuoted(sql, i);
+      const end = endOfQuoted(sql, i, my && c === '"');
       const stop = end === -1 ? i + 1 : end;
       emit(sql.slice(i, stop));
       i = stop;

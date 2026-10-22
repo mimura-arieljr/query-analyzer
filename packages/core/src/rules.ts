@@ -1,5 +1,5 @@
 import { hasTopLevelWhere, prepare, splitStatements } from './text';
-import type { PreparedSql } from './text';
+import type { Dialect, PreparedSql } from './text';
 import type { Category, Certainty, Level } from './types';
 
 // Task 4 adds: 'string-built-sql' | 'hardcoded-password' | 'leading-wildcard-like'
@@ -11,7 +11,9 @@ export type RuleId =
   | 'data-modifying-cte'
   | 'delete-update-with-where'
   | 'insert-select-into'
-  | 'grant-revoke';
+  | 'grant-revoke'
+  | 'replace-into'
+  | 'merge';
 
 export interface RuleHit {
   id: RuleId;
@@ -49,39 +51,49 @@ const DOLLAR_TAG = /^\$(?:[A-Za-z_][A-Za-z0-9_]*)?\$/;
 // Splits `noComments` at the same semicolons splitStatements() uses on `stripped`.
 // - Only single-quoted strings hide a `;` here, because only they are blanked there.
 // - Quoted identifiers and dollar-quoted spans are walked so a quote inside them is ignored.
-function splitNoComments(text: string): string[] {
+function splitNoComments(text: string, dialect: Dialect): string[] {
+  const backslash = dialect === 'mysql';
   const parts: string[] = [];
   let cur = '';
   let i = 0;
-  const closeOf = (open: number, tag: string): number => {
-    const at = text.indexOf(tag, open + tag.length);
-    return at === -1 ? -1 : at + tag.length;
+  // Index past the closing quote, or -1 if unterminated.
+  const quoteEnd = (open: number, escapes: boolean): number => {
+    const q = text[open];
+    let j = open + 1;
+    while (j < text.length) {
+      if (escapes && text[j] === '\\') {
+        j += 2;
+        continue;
+      }
+      if (text[j] === q) {
+        if (text[j + 1] === q) {
+          j += 2;
+          continue;
+        }
+        return j + 1;
+      }
+      j++;
+    }
+    return -1;
   };
   while (i < text.length) {
     const c = text[i];
     let end = -1;
     let hides = false;
     if (c === "'") {
-      let j = i + 1;
-      while (j < text.length) {
-        if (text[j] === "'") {
-          if (text[j + 1] === "'") {
-            j += 2;
-            continue;
-          }
-          end = j + 1;
-          break;
-        }
-        j++;
-      }
+      end = quoteEnd(i, backslash);
       hides = true;
       if (end === -1) end = text.length;
-    } else if (c === '"' || c === '`') {
-      // Unterminated: prepare() consumes just the quote character.
-      end = closeOf(i, c);
+    } else if (c === '"') {
+      end = quoteEnd(i, backslash);
+    } else if (c === '`') {
+      end = quoteEnd(i, false);
     } else if (c === '$' && !(i > 0 && IDENT_CHAR.test(text[i - 1]))) {
       const tag = DOLLAR_TAG.exec(text.slice(i, i + 64))?.[0];
-      if (tag) end = closeOf(i, tag);
+      if (tag) {
+        const at = text.indexOf(tag, i + tag.length);
+        end = at === -1 ? -1 : at + tag.length;
+      }
     }
     if (end === -1) end = i + 1;
     for (let k = i; k < end; k++) {
@@ -98,9 +110,15 @@ function splitNoComments(text: string): string[] {
   return parts.map((s) => s.trim()).filter((s) => s.length > 0);
 }
 
+interface Word {
+  text: string;
+  start: number;
+  end: number;
+}
+
 // Words at parenthesis depth 0, in order, upper-cased.
-function topLevelWords(statement: string): string[] {
-  const words: string[] = [];
+function topLevelWords(statement: string): Word[] {
+  const words: Word[] = [];
   let depth = 0;
   let i = 0;
   while (i < statement.length) {
@@ -117,7 +135,7 @@ function topLevelWords(statement: string): string[] {
     } else if (IDENT_CHAR.test(c)) {
       let j = i;
       while (j < statement.length && IDENT_CHAR.test(statement[j])) j++;
-      if (depth === 0) words.push(statement.slice(i, j).toUpperCase());
+      if (depth === 0) words.push({ text: statement.slice(i, j).toUpperCase(), start: i, end: j });
       i = j;
     } else {
       i++;
@@ -128,15 +146,34 @@ function topLevelWords(statement: string): string[] {
 
 // `WITH x AS (...) DELETE FROM t` is a DELETE, so look past the WITH clause.
 function kindOf(statement: string): string {
-  const words = topLevelWords(statement);
+  const words = topLevelWords(statement).map((w) => w.text);
   const first = words[0] ?? '';
   if (first !== 'WITH') return first;
-  const main = words.find((w) => ['SELECT', 'INSERT', 'UPDATE', 'DELETE'].includes(w));
+  const main = words.find((w) => ['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'MERGE'].includes(w));
   return main ?? first;
 }
 
-const ALWAYS_TRUE_STRIPPED = /\bOR\s+\(*\s*(?:TRUE\b|(\d+(?:\.\d+)?)\s*=\s*\1(?![\d.]))/i;
-const ALWAYS_TRUE_STRING = /\bOR\s+\(*\s*'((?:[^']|'')*)'\s*=\s*'\1'/i;
+// Text after the top-level WHERE, or null when there is none.
+function whereClause(statement: string): string | null {
+  const w = topLevelWords(statement).find((x) => x.text === 'WHERE');
+  return w ? statement.slice(w.end) : null;
+}
+
+// OR, or `||` which MySQL reads as OR.
+const OR_OP = String.raw`(?:\bOR\b|\|\|)`;
+// A bare value or comparison that is true for every row (one capture group, for the backreference).
+const TERM = String.raw`(?:$|\bOR\b|\|\||\bRETURNING\b|\bORDER\b|\bLIMIT\b|\bGROUP\b)`;
+const BARE_END = String.raw`(?=\s*\)*\s*${TERM})`;
+const TAUTOLOGY = String.raw`(?:TRUE\b|(\d+(?:\.\d+)?)\s*=\s*\1(?![\d.])|NOT\s+FALSE\b|\d+\s+IS\s+NOT\s+NULL\b|[1-9]\d*(?:\.\d+)?${BARE_END})`;
+// `... OR <always true>` anywhere in the statement.
+const OR_TRUE = new RegExp(String.raw`${OR_OP}\s*\(*\s*${TAUTOLOGY}`, 'i');
+// A WHERE clause that is only a tautology, or a tautology followed by OR.
+const WHERE_TRUE = new RegExp(String.raw`^\s*\(*\s*${TAUTOLOGY}\s*\)*\s*${TERM}`, 'i');
+// `OR 'x' = 'x'` or `OR "x" = "x"` (same literal), checked where the literals are still visible.
+const OR_SAME_LITERAL = new RegExp(
+  String.raw`${OR_OP}\s*\(*\s*(?:'((?:[^']|'')*)'\s*=\s*'\1'|"((?:[^"]|"")*)"\s*=\s*"\2")`,
+  'i',
+);
 
 const isWrite = (s: Stmt) => s.kind === 'DELETE' || s.kind === 'UPDATE';
 
@@ -155,7 +192,10 @@ const noWhere: RuleFn = (s) =>
     : [];
 
 const alwaysTrue: RuleFn = (s) =>
-  isWrite(s) && (ALWAYS_TRUE_STRIPPED.test(s.stripped) || ALWAYS_TRUE_STRING.test(s.noComments))
+  isWrite(s) &&
+  (OR_TRUE.test(s.stripped) ||
+    OR_SAME_LITERAL.test(s.noComments) ||
+    WHERE_TRUE.test(whereClause(s.stripped) ?? '\u0000'))
     ? [
         certain({
           id: 'always-true-where',
@@ -168,15 +208,19 @@ const alwaysTrue: RuleFn = (s) =>
       ]
     : [];
 
+// After DROP in an ALTER, these words name a constraint-like object, not data.
+const ALTER_DROPS_DATA =
+  /\bDROP\s+(?!(?:CONSTRAINT|INDEX|KEY|PRIMARY|FOREIGN|CHECK|DEFAULT|NOT)\b)[\w"`]|\bTRUNCATE\s+PARTITION\b/i;
+
 const dropTruncate: RuleFn = (s) => {
-  const dropsColumn = s.kind === 'ALTER' && /\bDROP\s+COLUMN\b/i.test(s.stripped);
-  if (s.kind !== 'DROP' && s.kind !== 'TRUNCATE' && !dropsColumn) return [];
+  const alterDrop = s.kind === 'ALTER' && ALTER_DROPS_DATA.test(s.stripped);
+  if (s.kind !== 'DROP' && s.kind !== 'TRUNCATE' && !alterDrop) return [];
   return [
     certain({
       id: 'drop-truncate',
       level: 'high',
-      reason: dropsColumn
-        ? 'This ALTER statement drops a column and the data in it.'
+      reason: alterDrop
+        ? 'This ALTER statement drops a column, partition or other object and the data in it.'
         : `This ${s.kind} statement permanently removes ${s.kind === 'DROP' ? 'a database object and its data' : 'all rows from a table'}.`,
       changesData: true,
       matchesModel:
@@ -186,7 +230,7 @@ const dropTruncate: RuleFn = (s) => {
 };
 
 const dataModifyingCte: RuleFn = (s) =>
-  s.stripped.trimStart().slice(0, 4).toUpperCase() === 'WITH' &&
+  /^WITH\b/i.test(s.stripped) &&
   /\(\s*(?:DELETE|UPDATE|INSERT)\b/i.test(s.stripped)
     ? [
         certain({
@@ -252,35 +296,166 @@ const grantRevoke: RuleFn = (s) =>
       ]
     : [];
 
-// Order matters: withWhere reads the hits the earlier rules produced for the statement.
+const replaceInto: RuleFn = (s) =>
+  s.kind === 'REPLACE'
+    ? [
+        certain({
+          id: 'replace-into',
+          level: 'medium',
+          reason: 'This REPLACE statement deletes any existing row with the same key and inserts a new one.',
+          changesData: true,
+          matchesModel: /\bREPLACE\b|overwrit\w*\s+(existing|rows?)|(deletes?|removes?)\b[^.]*\b(existing|same key)/i,
+        }),
+      ]
+    : [];
+
+const merge: RuleFn = (s) =>
+  s.kind === 'MERGE'
+    ? [
+        certain({
+          id: 'merge',
+          level: 'medium',
+          reason: 'This MERGE statement inserts, updates or deletes rows depending on whether they match.',
+          changesData: true,
+          matchesModel: /\bMERGE\b|\bupsert\b|\bWHEN\s+(NOT\s+)?MATCHED\b/i,
+        }),
+      ]
+    : [];
+
+// Bodies of `(DELETE ...)` and `(UPDATE ...)` inside a WITH clause.
+function cteWriteBodies(statement: string): string[] {
+  const bodies: string[] = [];
+  const open = /\(\s*(?=(?:DELETE|UPDATE)\b)/gi;
+  let m: RegExpExecArray | null;
+  while ((m = open.exec(statement))) {
+    const start = m.index + m[0].length;
+    let depth = 1;
+    let i = start;
+    while (i < statement.length && depth > 0) {
+      if (statement[i] === '(') depth++;
+      else if (statement[i] === ')') depth--;
+      i++;
+    }
+    bodies.push(statement.slice(start, depth === 0 ? i - 1 : i));
+  }
+  return bodies;
+}
+
+// A data-modifying CTE is checked like the DELETE/UPDATE it contains.
+const cteBodies: RuleFn = (s) =>
+  /^WITH\b/i.test(s.stripped)
+    ? cteWriteBodies(s.stripped).flatMap((body) => {
+        const inner: Stmt = { stripped: body, noComments: s.noComments, kind: kindOf(body) };
+        return [...noWhere(inner, []), ...alwaysTrue(inner, [])];
+      })
+    : [];
+
+// Order matters: withWhere reads the hits earlier rules made for the statement,
+// so cteBodies runs after it.
 const RULES: RuleFn[] = [
   noWhere,
   alwaysTrue,
   dropTruncate,
   dataModifyingCte,
   withWhere,
+  cteBodies,
   insertSelectInto,
   grantRevoke,
+  replaceInto,
+  merge,
 ];
 
-function statementsOf(p: PreparedSql): Stmt[] {
-  const stripped = splitStatements(p.stripped);
-  const plain = splitNoComments(p.noComments);
-  const aligned = plain.length === stripped.length;
-  // On a split mismatch use the whole text: a spurious warning beats a missed one.
-  return stripped.map((text, i) => ({
-    stripped: text,
-    noComments: aligned ? plain[i] : p.noComments,
-    kind: kindOf(text),
-  }));
+const BALANCED = String.raw`(?:\((?:[^()]|\([^()]*\))*\))`;
+const EXPLAIN_PAREN = new RegExp(String.raw`^EXPLAIN\s*\(((?:[^()]|\([^()]*\))*)\)\s*`, 'i');
+const EXPLAIN_PLAIN = /^EXPLAIN\s+(?:(?:ANALY[SZ]E|VERBOSE|FORMAT\s*=\s*\w+)\b\s*)+/i;
+const ANALYZE_ON = /\bANALY[SZ]E\b(?!\s*(?:FALSE|OFF|0)\b)/i;
+const PREPARE = new RegExp(String.raw`^PREPARE\s+[\w$"]+\s*${BALANCED}?\s*AS\s+`, 'i');
+
+// Drops a leading `EXPLAIN ANALYZE` or `PREPARE name AS`, which still run the statement.
+// Plain EXPLAIN does not execute, so it is left alone.
+function peelPrefixes(text: string): string {
+  let cur = text;
+  for (;;) {
+    let next = cur;
+    const paren = EXPLAIN_PAREN.exec(cur);
+    if (paren) {
+      if (ANALYZE_ON.test(paren[1])) next = cur.slice(paren[0].length);
+    } else {
+      const plain = EXPLAIN_PLAIN.exec(cur);
+      if (plain && ANALYZE_ON.test(plain[0])) next = cur.slice(plain[0].length);
+    }
+    next = next.replace(PREPARE, '');
+    if (next === cur) return cur;
+    cur = next;
+  }
 }
 
-export function runRules(query: string): RuleHit[] {
+const DO_OPEN = /^DO\b(?:\s+LANGUAGE\s+\w+)?\s*(\$(?:[A-Za-z_][A-Za-z0-9_]*)?\$)/i;
+const PLPGSQL_WORD = /^\s*(?:BEGIN|ELSE|LOOP|EXCEPTION|DECLARE|END|THEN)\b/i;
+const PLPGSQL_COND = /^\s*(?:IF|ELSIF|ELSEIF|WHEN|FOR|WHILE|FOREACH|CASE)\b[\s\S]*?\b(?:THEN|LOOP)\b/i;
+
+// Drops block keywords in front of a statement inside a DO body.
+function peelPlpgsql(text: string): string {
+  let cur = text;
+  for (;;) {
+    const next = cur.replace(PLPGSQL_WORD, '').replace(PLPGSQL_COND, '');
+    if (next === cur) return cur.trim();
+    cur = next;
+  }
+}
+
+function statementsOf(p: PreparedSql, dialect: Dialect): Stmt[] {
+  const stripped = splitStatements(p.stripped);
+  const plain = splitNoComments(p.noComments, dialect);
+  const aligned = plain.length === stripped.length;
+  const out: Stmt[] = [];
+  // Tag of the DO body being read; its `;`-separated parts are statements.
+  let doTag: string | null = null;
+  stripped.forEach((piece, i) => {
+    let text = piece;
+    if (doTag !== null) {
+      if (text.includes(doTag)) doTag = null;
+      text = peelPlpgsql(text);
+    } else {
+      const open = DO_OPEN.exec(text);
+      if (open) {
+        const rest = text.slice(open[0].length);
+        if (!rest.includes(open[1])) doTag = open[1];
+        text = peelPlpgsql(rest);
+      }
+    }
+    text = peelPrefixes(text);
+    // On a split mismatch use the whole text: a spurious warning beats a missed one.
+    out.push({ stripped: text, noComments: aligned ? plain[i] : p.noComments, kind: kindOf(text) });
+  });
+  return out;
+}
+
+function runReading(query: string, dialect: Dialect): RuleHit[] {
   const out: RuleHit[] = [];
-  for (const stmt of statementsOf(prepare(query))) {
+  for (const stmt of statementsOf(prepare(query, dialect), dialect)) {
     const hits: RuleHit[] = [];
     for (const rule of RULES) hits.push(...rule(stmt, hits));
     out.push(...hits);
+  }
+  return out;
+}
+
+const hitKey = (h: RuleHit) => `${h.id}\u0000${h.reason}`;
+
+// MySQL and PostgreSQL read some syntax differently (`--x`, `#`, backslash, nested comments).
+// - Run both readings, since the dialect is not known here.
+// - Per (rule, reason), keep the larger count seen in either reading.
+export function runRules(query: string): RuleHit[] {
+  const mysql = runReading(query, 'mysql');
+  const have = new Map<string, number>();
+  for (const h of mysql) have.set(hitKey(h), (have.get(hitKey(h)) ?? 0) + 1);
+  const out = [...mysql];
+  const seen = new Map<string, number>();
+  for (const h of runReading(query, 'postgresql')) {
+    const n = (seen.get(hitKey(h)) ?? 0) + 1;
+    seen.set(hitKey(h), n);
+    if (n > (have.get(hitKey(h)) ?? 0)) out.push(h);
   }
   return out;
 }

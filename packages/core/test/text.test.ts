@@ -129,3 +129,34 @@ describe('hasTopLevelWhere', () => {
     expect(hasTopLevelWhere(prepare('UPDATE t SET note = $$ x $$ WHERE id = 1').stripped)).toBe(true);
   });
 });
+
+describe('prepare dialects', () => {
+  it('mysql: # starts a line comment; postgresql: it does not', () => {
+    expect(prepare('SELECT 1 # note\nFROM t').stripped).not.toContain('note');
+    expect(prepare('SELECT a #> b FROM t', 'postgresql').stripped).toContain('#>');
+  });
+
+  it('postgresql: -- is always a comment; mysql keeps it without a space', () => {
+    expect(prepare('SELECT 1 --x\nFROM t', 'postgresql').stripped).not.toContain('x');
+    expect(prepare('SELECT 1 --x\nFROM t', 'mysql').stripped).toContain('--x');
+  });
+
+  it('mysql: a backslash escapes a quote; postgresql: it does not', () => {
+    expect(prepare("SELECT 'a\\'' , 1").stripped).toBe("SELECT '' , 1");
+    expect(prepare("SELECT 'a\\' , 1", 'postgresql').stripped).toBe("SELECT '' , 1");
+  });
+
+  it('postgresql: block comments nest; mysql: they do not', () => {
+    expect(prepare('A /* x /* y */ z */ B', 'postgresql').stripped).toBe('A  B');
+    expect(prepare('A /* x /* y */ z */ B', 'mysql').stripped).toContain('z');
+  });
+
+  it('mysql: /*!50000 ... */ drops the version digits and keeps the inner text', () => {
+    expect(prepare('/*!50000DELETE FROM t*/').stripped.trim()).toBe('DELETE FROM t');
+    expect(prepare('/*!50000 DELETE FROM t */').stripped.trim()).toBe('DELETE FROM t');
+  });
+
+  it('postgresql: /*! is an ordinary comment', () => {
+    expect(prepare('A /*! B */ C', 'postgresql').stripped).toBe('A  C');
+  });
+});
