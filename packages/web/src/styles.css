@@ -161,7 +161,79 @@ input[type='password']:focus {
   font-weight: 600;
 }
 .unlock {
-  max-width: 420px;
+  max-width: 440px;
+  margin: 24px auto 0;
+  padding: 24px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+.unlock-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+.unlock-head h2 {
+  margin: 0;
+  font-size: 20px;
+}
+.lock-badge {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: 1px solid var(--accent);
+  color: var(--accent-text);
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface));
+}
+.unlock label {
+  display: block;
+  margin-top: 16px;
+}
+.secret-row {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+.secret-row input {
+  flex: 1;
+  min-width: 0;
+}
+.secret-row .btn-ghost {
+  min-width: 64px;
+}
+input[aria-invalid='true'] {
+  border-color: var(--high);
+}
+.unlock .actions .btn-primary {
+  margin-left: 0;
+}
+.help {
+  margin-top: 20px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  font-size: 14px;
+}
+.help summary {
+  cursor: pointer;
+  color: var(--accent-text);
+}
+.help ol {
+  margin: 10px 0 8px;
+  padding-left: 20px;
+}
+.help li {
+  margin-bottom: 4px;
+}
+.help code {
+  font: 13px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  background: var(--code-bg);
+  padding: 2px 6px;
+  border-radius: 5px;
+  overflow-wrap: anywhere;
 }
 .error {
   margin: 12px 0 0;
