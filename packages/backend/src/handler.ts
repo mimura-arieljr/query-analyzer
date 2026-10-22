@@ -130,6 +130,8 @@ export function createHandler(deps: HandlerDeps): LambdaHandler {
     } catch {
       return fail('failed');
     }
+    // An empty or non-string secret must never authenticate.
+    if (typeof expected !== 'string' || expected === '') return fail('failed');
     if (!secretMatches(event.headers?.['x-app-secret'] ?? '', expected)) return fail('unauthorized');
 
     if (path === '/api/check') return respond(204);

@@ -130,6 +130,40 @@ describe('auth and routing', () => {
     expect(analyze).not.toHaveBeenCalled();
   });
 
+  describe('an empty or invalid configured secret never authenticates', () => {
+    const bad: [string, unknown][] = [
+      ['empty string', ''],
+      ['undefined', undefined],
+      ['number', 42],
+    ];
+    const routes: [string, string][] = [
+      ['GET', '/api/check'],
+      ['POST', '/api/analyze'],
+    ];
+    for (const [label, value] of bad) {
+      for (const [method, path] of routes) {
+        for (const secret of [null, '']) {
+          it(`${label} secret, ${secret === null ? 'no' : 'empty'} header, ${path} is 500 failed`, async () => {
+            const analyze = vi.fn(async () => okResult());
+            const handler = createHandler({
+              getSecret: async () => value as string,
+              analyze,
+              log: vi.fn(),
+            });
+            const res = await handler(makeEvent({ method, path, secret, body: JSON.stringify({ query: 'SELECT 1' }) }));
+            expect(res.statusCode).toBe(500);
+            expect(parse(res.body)).toMatchObject({
+              ok: false,
+              error: 'failed',
+              message: "Couldn't analyse that. Try again.",
+            });
+            expect(analyze).not.toHaveBeenCalled();
+          });
+        }
+      }
+    }
+  });
+
   it('responses are json and not cached', async () => {
     const { handler } = setup();
     const res = await handler(post('SELECT 1'));
