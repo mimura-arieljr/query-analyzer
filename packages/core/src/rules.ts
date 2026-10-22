@@ -472,7 +472,8 @@ const orderByRandom: RuleFn = (s) =>
     : [];
 
 const LOGS_START = /^(?:fields|filter|stats|parse)\b/i;
-const LOGS_FORBIDDEN = /\b(?:SELECT|INSERT|UPDATE|DELETE|DROP|FROM)\b/i;
+const LOGS_FORBIDDEN =
+  /\b(?:SELECT|INSERT|UPDATE|DELETE|DROP|FROM|TRUNCATE|GRANT|REVOKE|CREATE|ALTER|REPLACE|MERGE|CALL)\b/i;
 
 // CloudWatch Logs Insights: starts with a Logs command and holds none of the SQL words.
 export function isLogsInsights(query: string): boolean {
@@ -595,8 +596,6 @@ const hitKey = (h: RuleHit) => `${h.id}\u0000${h.reason}`;
 // - Run both readings, since the dialect is not known here.
 // - Per (rule, reason), keep the larger count seen in either reading.
 export function runRules(query: string): RuleHit[] {
-  // Not SQL: only the whole-query hit applies.
-  if (isLogsInsights(query)) return [logsInsightsHit()];
   const mysql = runReading(query, 'mysql');
   const have = new Map<string, number>();
   for (const h of mysql) have.set(hitKey(h), (have.get(hitKey(h)) ?? 0) + 1);
@@ -607,5 +606,8 @@ export function runRules(query: string): RuleHit[] {
     seen.set(hitKey(h), n);
     if (n > (have.get(hitKey(h)) ?? 0)) out.push(h);
   }
+  // Read-only only if nothing else found a data change or a danger.
+  const risky = out.some((h) => h.changesData || (h.category === 'danger' && h.level !== 'none'));
+  if (isLogsInsights(query) && !risky) out.push(logsInsightsHit());
   return out;
 }

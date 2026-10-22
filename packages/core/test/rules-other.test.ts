@@ -153,6 +153,27 @@ describe('logs insights', () => {
     });
   });
 
+  it('SQL that only starts with a Logs word keeps its dangers and is not read-only', () => {
+    const cases: [string, string][] = [
+      ['fields; TRUNCATE TABLE t', 'drop-truncate'],
+      ['fields a; TRUNCATE t', 'drop-truncate'],
+      ['stats; GRANT ALL ON t TO u', 'grant-revoke'],
+      ['stats; REPLACE INTO t VALUES (1)', 'replace-into'],
+      ["parse; CREATE USER x IDENTIFIED BY 'pw'", 'hardcoded-password'],
+    ];
+    for (const [q, id] of cases) {
+      expect(isLogsInsights(q), q).toBe(false);
+      expect(ids(q), q).toContain(id);
+      expect(ids(q), q).not.toContain('logs-insights-read-only');
+    }
+  });
+
+  it('security or performance hits do not suppress logs-insights-read-only', () => {
+    const got = ids('fields @message | filter @message like "%x"');
+    expect(got).toContain('logs-insights-read-only');
+    expect(got).toContain('leading-wildcard-like');
+  });
+
   it('SQL does not get logs-insights-read-only', () => {
     expect(ids('SELECT * FROM t')).not.toContain('logs-insights-read-only');
   });
