@@ -6,7 +6,7 @@ Paste a PostgreSQL, MySQL or CloudWatch Logs Insights query and get a plain-lang
 
 - The web page is a static site in S3, served by CloudFront.
 - CloudFront sends `/api/*` to a Lambda function URL, using origin access control (the function URL is not open to the internet directly).
-- The Lambda function runs the rules, then calls Amazon Bedrock (Converse API) to explain the query.
+- The Lambda function calls Amazon Bedrock (Converse API) to explain the query, then merges the reply with the rule findings. See [How the rules and the model work together](#how-the-rules-and-the-model-work-together).
 - A shared secret in Secrets Manager protects the API. You type it into the unlock box on the page.
 
 ### Sample model reply
@@ -103,6 +103,44 @@ This is the JSON Bedrock returns for a PostgreSQL query with `$client` and `$ap_
   }
 }
 ```
+
+## How the rules and the model work together
+
+Two independent checks look at the same query, and the result is a merge of both. The answer does not rest on the model alone.
+
+| | Model (Bedrock) | Rules (`packages/core/src/rules`) |
+| --- | --- | --- |
+| Good at | Explaining the query, step by step, and judging context (for example, "this looks like a placeholder a tool fills in") | Spotting known risky patterns the same way every time |
+| Weak at | Can miss a risk, or call one a non-issue | Only knows the patterns written into it; cannot explain anything |
+| Output | The whole reply: explanation, steps, findings, rewrite | Findings only |
+
+```
+query ──► Bedrock model ──► model reply ──┐
+  │                                       ├──► finalize ──► response
+  └─────► rules (regex checks) ──► hits ──┘
+```
+
+The two never see each other's work until the merge. The model gets only the query and the prompt, and the rules get only the query text.
+
+### What the merge does
+
+- Each category (danger, security, performance) takes the higher of the model's level and any rule's level.
+- A rule finding is added to the model's findings. If the model already reported the same certain finding, the model's copy is dropped so it is not listed twice.
+- A rule that finds a data change sets "can change data" to yes, even if the model said no.
+- If the model says the text is not a query but the rules find danger, a data change or string-built SQL, the rules win and the findings are shown.
+- A Logs Insights query is shown as read-only, but only when no rule found a risk. This is the only case where the rules lower a warning.
+- The model's rewritten query is dropped when it is no safer than the original, or when the original changes data.
+
+The merge lives in `packages/core/src/finalize.ts`. The explanation text still comes from the model alone, so it can be wrong. The rules make sure the warnings do not depend on it.
+
+### Improving the results
+
+- **Add a rule** when the model keeps missing a risk, or a warning must never depend on the model:
+  1. Add the id to `RuleId` in `packages/core/src/rules/types.ts`.
+  2. Define the rule with `certainRule` or `possibleRule` in a file under `packages/core/src/rules/definitions`.
+  3. Add it to `RULES` in `packages/core/src/rules/registry.ts`.
+  4. Add tests in `packages/core/test`.
+- **Use a better model** when the explanations or the context-based findings are weak. See [Switching to another model](#switching-to-another-model).
 
 ## Prerequisites
 

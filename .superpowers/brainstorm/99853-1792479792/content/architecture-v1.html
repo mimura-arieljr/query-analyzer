@@ -1,0 +1,82 @@
+<h2>Deployed architecture (one CDK stack, in the deployer's own AWS account)</h2>
+<p class="subtitle">Boxes marked "my guess" are calls I made that you haven't agreed to yet.</p>
+
+<div class="section">
+  <div class="mockup">
+    <div class="mockup-header">Request path: one CloudFront domain, two origins</div>
+    <div class="mockup-body">
+      <div style="display:flex;align-items:stretch;gap:12px;flex-wrap:wrap">
+
+        <div style="flex:1;min-width:150px;border:2px solid #888;border-radius:8px;padding:12px">
+          <div class="label">1. Browser</div>
+          <p><b>Static web app</b></p>
+          <p>Paste query, pick language (or auto-detect)</p>
+          <p><b>Rules layer runs here</b> (red-flag checks, type guess)</p>
+          <p>Renders the result sections</p>
+        </div>
+
+        <div style="align-self:center;font-size:24px">&rarr;</div>
+
+        <div style="flex:1;min-width:150px;border:2px solid #888;border-radius:8px;padding:12px">
+          <div class="label">2. CloudFront</div>
+          <p>HTTPS, one domain</p>
+          <p><code>/*</code> &rarr; S3 (the site)</p>
+          <p><code>/api/*</code> &rarr; backend</p>
+          <p>Same origin, so no CORS headaches</p>
+        </div>
+
+        <div style="align-self:center;font-size:24px">&rarr;</div>
+
+        <div style="flex:1;min-width:150px;border:2px solid #888;border-radius:8px;padding:12px">
+          <div class="label">3. Auth gate (my guess)</div>
+          <p>Stops strangers from spending the deployer's Bedrock money</p>
+          <p>Options: Cognito login, or a shared secret set at deploy time</p>
+        </div>
+
+        <div style="align-self:center;font-size:24px">&rarr;</div>
+
+        <div style="flex:1;min-width:150px;border:2px solid #888;border-radius:8px;padding:12px">
+          <div class="label">4. Lambda</div>
+          <p>Builds the prompt from the query + rule findings</p>
+          <p>Calls Bedrock <b>Converse</b> with a JSON schema</p>
+          <p>Validates the reply, returns it</p>
+          <p>IAM role: <code>bedrock:InvokeModel</code> only</p>
+        </div>
+
+        <div style="align-self:center;font-size:24px">&rarr;</div>
+
+        <div style="flex:1;min-width:150px;border:2px solid #888;border-radius:8px;padding:12px">
+          <div class="label">5. Bedrock</div>
+          <p>Model ID is a CDK setting (my guess: a Claude model)</p>
+          <p>Deployer must enable model access first</p>
+        </div>
+
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <div class="mockup">
+    <div class="mockup-header">What the app returns (one structured response)</div>
+    <div class="mockup-body">
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <div class="placeholder" style="flex:1;min-width:140px">Query type<br>(SQL dialect, KQL, Logs Insights...)</div>
+        <div class="placeholder" style="flex:1;min-width:140px">What it does</div>
+        <div class="placeholder" style="flex:1;min-width:140px">Simple explanation</div>
+        <div class="placeholder" style="flex:1;min-width:140px">Step-by-step breakdown<br>(my addition)</div>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+        <div class="placeholder" style="flex:1;min-width:140px">Improvements</div>
+        <div class="placeholder" style="flex:1;min-width:140px">Security</div>
+        <div class="placeholder" style="flex:1;min-width:140px">Danger level<br>(rules + model)</div>
+        <div class="placeholder" style="flex:1;min-width:140px">Performance</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <p class="label">Not in the stack on purpose</p>
+  <p>No database, no user accounts beyond the gate, no stored queries. Nothing is kept after the response, which also helps with privacy.</p>
+</div>

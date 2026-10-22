@@ -1,0 +1,4 @@
+{"type":"server-started","port":60647,"host":"127.0.0.1","url_host":"localhost","url":"http://localhost:60647/?key=6f52907d58cbc52c5989216f7a7be0a221461227ea64653d47f71a6f8b6b6b8b","screen_dir":"/Users/chockmimura/Documents/GitHub/query-analyzer/.superpowers/brainstorm/99853-1792479792/content","state_dir":"/Users/chockmimura/Documents/GitHub/query-analyzer/.superpowers/brainstorm/99853-1792479792/state","idle_timeout_ms":14400000}
+{"type":"screen-added","file":"/Users/chockmimura/Documents/GitHub/query-analyzer/.superpowers/brainstorm/99853-1792479792/content/architecture-v1.html"}
+{"type":"screen-added","file":"/Users/chockmimura/Documents/GitHub/query-analyzer/.superpowers/brainstorm/99853-1792479792/content/waiting-1.html"}
+{"type":"server-stopped","reason":"owner process exited"}
