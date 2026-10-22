@@ -100,6 +100,39 @@ describe('the help popover', () => {
   });
 });
 
+describe('the unlock card layout', () => {
+  it('puts the app name at the top of the card, once', () => {
+    render(<UnlockGate onUnlock={vi.fn()} />);
+    const card = document.querySelector('form.unlock') as HTMLElement;
+    const title = screen.getByRole('heading', { name: 'Query Analyzer' });
+    expect(card.contains(title)).toBe(true);
+    expect(card.firstElementChild?.contains(title)).toBe(true);
+    expect(screen.getAllByRole('heading', { name: 'Query Analyzer' })).toHaveLength(1);
+  });
+
+  it('shows Show and Unlock as icon-only buttons inside the field, side by side', () => {
+    render(<UnlockGate onUnlock={vi.fn()} />);
+    const show = screen.getByRole('button', { name: 'Show' });
+    const unlock = screen.getByRole('button', { name: 'Unlock' });
+    expect(show.textContent).toBe('');
+    expect(unlock.textContent).toBe('');
+    expect(show.querySelector('svg')?.getAttribute('aria-hidden')).toBe('true');
+    expect(unlock.querySelector('svg')?.getAttribute('aria-hidden')).toBe('true');
+    expect(unlock.getAttribute('type')).toBe('submit');
+    expect(show.parentElement).toBe(unlock.parentElement);
+    expect(show.closest('.secret-field')).toBe(field().parentElement);
+  });
+
+  it('swaps the Unlock icon for a busy state while checking', () => {
+    vi.mocked(checkSecret).mockReturnValue(new Promise(() => {}));
+    render(<UnlockGate onUnlock={vi.fn()} />);
+    type('pw');
+    submit();
+    const busy = screen.getByRole('button', { name: 'Checking...' });
+    expect(busy.querySelector('svg')?.getAttribute('class')).toBe('spin');
+  });
+});
+
 describe('UnlockGate', () => {
   it('focuses the field when the screen appears', () => {
     render(<UnlockGate onUnlock={vi.fn()} />);

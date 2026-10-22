@@ -47,6 +47,52 @@ function InfoIcon() {
   );
 }
 
+function EyeIcon({ off }: { off: boolean }) {
+  return (
+    <svg
+      width="18"
+      height="18"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z" />
+      <circle cx="12" cy="12" r="3" />
+      {off && <path d="M4 4l16 16" />}
+    </svg>
+  );
+}
+
+function UnlockIcon({ busy }: { busy: boolean }) {
+  return (
+    <svg
+      className={busy ? 'spin' : undefined}
+      width="18"
+      height="18"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      {busy ? (
+        <path d="M12 3a9 9 0 1 0 9 9" />
+      ) : (
+        <>
+          <rect x="4" y="11" width="16" height="10" rx="2" />
+          <path d="M8 11V7a4 4 0 0 1 7.5-2" />
+        </>
+      )}
+    </svg>
+  );
+}
+
 export function UnlockGate({ onUnlock, notice }: Props) {
   const [secret, setSecret] = useState('');
   const [message, setMessage] = useState(notice ?? '');
@@ -124,7 +170,9 @@ export function UnlockGate({ onUnlock, notice }: Props) {
         <span className="lock-badge">
           <LockIcon />
         </span>
-        <h2>Unlock</h2>
+        <h1>
+          Query <span>Analyzer</span>
+        </h1>
       </div>
       <p className="muted">
         This tool is private. Paste the shared secret that was created when it was deployed.
@@ -160,7 +208,7 @@ export function UnlockGate({ onUnlock, notice }: Props) {
       <p className="hint" id="secret-hint">
         Kept in this tab only. It is forgotten when you refresh the page.
       </p>
-      <div className="secret-row">
+      <div className="secret-field">
         <input
           ref={input}
           id="secret"
@@ -180,21 +228,28 @@ export function UnlockGate({ onUnlock, notice }: Props) {
             setInvalid(false);
           }}
         />
-        <button
-          className="btn-ghost small"
-          type="button"
-          aria-pressed={shown}
-          aria-controls="secret"
-          onClick={() => setShown(!shown)}
-        >
-          {shown ? 'Hide' : 'Show'}
-        </button>
-      </div>
-
-      <div className="actions">
-        <button className="btn-primary" type="submit" disabled={checking}>
-          {checking ? 'Checking...' : 'Unlock'}
-        </button>
+        <div className="field-actions">
+          <button
+            className="icon-button"
+            type="button"
+            aria-label={shown ? 'Hide' : 'Show'}
+            title={shown ? 'Hide' : 'Show'}
+            aria-pressed={shown}
+            aria-controls="secret"
+            onClick={() => setShown(!shown)}
+          >
+            <EyeIcon off={shown} />
+          </button>
+          <button
+            className="icon-button primary"
+            type="submit"
+            aria-label={checking ? 'Checking...' : 'Unlock'}
+            title={checking ? 'Checking...' : 'Unlock'}
+            disabled={checking}
+          >
+            <UnlockIcon busy={checking} />
+          </button>
+        </div>
       </div>
       <p className="error" id="secret-error" role="alert">
         {message}

@@ -414,6 +414,26 @@ describe('storage and theme', () => {
     expect(setItem).not.toHaveBeenCalled();
   });
 
+  it('the theme button is an icon that still names the mode it switches to', () => {
+    render(<App />);
+    const toggle = screen.getByRole('button', { name: 'Light mode' });
+    expect(toggle.textContent).toBe('');
+    expect(toggle.querySelector('svg')?.getAttribute('aria-hidden')).toBe('true');
+    fireEvent.click(toggle);
+    expect(screen.getByRole('button', { name: 'Dark mode' }).textContent).toBe('');
+  });
+
+  it('the page title moves into the unlock card and returns to the header after unlocking', async () => {
+    vi.mocked(checkSecret).mockResolvedValue('ok');
+    render(<App />);
+    expect(document.querySelector('header h1')).toBeNull();
+    expect(screen.getAllByRole('heading', { name: 'Query Analyzer' })).toHaveLength(1);
+    fireEvent.change(screen.getByLabelText(/secret/i), { target: { value: 'pw' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Unlock' }));
+    await screen.findByLabelText(FORM_LABEL);
+    expect(document.querySelector('header h1')?.textContent).toBe('Query Analyzer');
+  });
+
   it('theme toggle switches data-theme', async () => {
     render(<App />);
     const root = document.documentElement;

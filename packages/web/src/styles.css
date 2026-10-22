@@ -78,14 +78,17 @@ h1 span {
   color: var(--accent-text);
 }
 .theme {
+  display: inline-grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  margin-left: auto;
+  padding: 0;
   background: none;
   border: 1px solid var(--border);
   color: var(--muted);
-  padding: 6px 12px;
   border-radius: 8px;
   cursor: pointer;
-  font: inherit;
-  font-size: 14px;
 }
 .theme:hover {
   color: var(--text);
@@ -189,9 +192,8 @@ input[type='password']:focus {
   gap: 12px;
   margin-bottom: 8px;
 }
-.unlock-head h2 {
-  margin: 0;
-  font-size: 20px;
+.unlock-head h1 {
+  font-size: 22px;
 }
 .lock-badge {
   display: inline-grid;
@@ -214,23 +216,67 @@ input[type='password']:focus {
   gap: 4px;
   margin-top: 16px;
 }
-.secret-row {
+.secret-field {
+  position: relative;
+}
+.secret-field input {
+  padding-right: 84px;
+}
+.secret-field input::-ms-reveal {
+  display: none;
+}
+.field-actions {
+  position: absolute;
+  top: 50%;
+  right: 8px;
+  transform: translateY(-50%);
   display: flex;
-  gap: 8px;
-  align-items: stretch;
+  gap: 4px;
 }
-.secret-row input {
-  flex: 1;
-  min-width: 0;
+.icon-button {
+  display: inline-grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
 }
-.secret-row .btn-ghost {
-  min-width: 64px;
+.icon-button:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--surface-2);
+}
+.icon-button.primary {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+.icon-button.primary:hover:not(:disabled) {
+  background: var(--accent);
+  color: var(--on-accent);
+  filter: brightness(0.92);
+}
+.icon-button:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+.spin {
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .spin {
+    animation: none;
+  }
 }
 input[aria-invalid='true'] {
   border-color: var(--high);
-}
-.unlock .actions .btn-primary {
-  margin-left: 0;
 }
 .info-button {
   display: inline-grid;
