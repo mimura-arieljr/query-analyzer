@@ -9,6 +9,101 @@ Paste a PostgreSQL, MySQL or CloudWatch Logs Insights query and get a plain-lang
 - The Lambda function runs the rules, then calls Amazon Bedrock (Converse API) to explain the query.
 - A shared secret in Secrets Manager protects the API. You type it into the unlock box on the page.
 
+### Sample model reply
+
+This is the JSON Bedrock returns for a PostgreSQL query with `$client` and `$ap_queues` placeholders. The Lambda function checks it against the schema, then merges in the rule findings before sending it to the page.
+
+```json
+{
+  "is_query": true,
+  "not_a_query_message": "",
+  "query_type": {
+    "language": "postgresql",
+    "dialect_note": "This looks like PostgreSQL. EXTRACT(EPOCH FROM ...) and the ::int cast are PostgreSQL syntax, and MySQL does not support them in this form. The $client and $ap_queues parts look like placeholders that a tool (for example a dashboard) fills in before the query runs. The \\\" and \\n in the pasted text look like escape characters from the string the query was copied from, not part of the SQL itself.",
+    "confidence": "high"
+  },
+  "what_it_does": "Calculates the average number of seconds that voice contacts have been waiting in the chosen queues, counting only contacts that are still waiting for an agent. It returns 0 if no contacts match.",
+  "detailed_explanation": "1) FROM/JOIN: it reads contact_records_realtime (alias crr) and matches each row to queue_configuration (alias qc) where both queue_id and client are equal. 2) WHERE: it keeps only rows where the client equals the $client value, the channel is 'VOICE', and the queue name is in the $ap_queues list. It also requires an enqueued time to be set, no connected_to_agent time (nobody has answered yet) and no disconnect time (the contact has not ended). Together, these mean the contact is still waiting. 3) SELECT: for each remaining row it subtracts the enqueued time from the current time, which gives an interval. EXTRACT(EPOCH FROM ...) turns that into seconds. AVG takes the mean of those seconds across all remaining rows. ::int converts the mean to a whole number, which rounds it. COALESCE replaces an empty result (NULL, when no rows match) with 0. The column is labelled \"Wait Time AVG\". There is no GROUP BY, so the result is a single row. There is no ORDER BY or LIMIT.",
+  "simple_explanation": "It looks at phone calls that are still waiting in line for the chosen queues and works out how long, on average, they have been waiting, in whole seconds. If nobody is waiting, it shows 0.",
+  "step_by_step": [
+    {
+      "snippet": "FROM contact_records_realtime crr",
+      "explanation": "Start with the table of live contact records."
+    },
+    {
+      "snippet": "JOIN queue_configuration qc ON qc.queue_id = crr.queue_id AND qc.client = crr.client",
+      "explanation": "Attach each contact's queue settings (such as the queue name), matching on both queue and client."
+    },
+    {
+      "snippet": "WHERE crr.client = '$client'",
+      "explanation": "Keep only contacts for one client, using the value the tool substitutes for $client."
+    },
+    {
+      "snippet": "AND crr.channel = 'VOICE'",
+      "explanation": "Keep only voice contacts."
+    },
+    {
+      "snippet": "AND qc.name IN ($ap_queues)",
+      "explanation": "Keep only contacts whose queue name is in the list substituted for $ap_queues."
+    },
+    {
+      "snippet": "AND crr.enqueued IS NOT NULL",
+      "explanation": "Keep only contacts that have a time recorded for entering the queue."
+    },
+    {
+      "snippet": "AND crr.connected_to_agent IS NULL",
+      "explanation": "Keep only contacts not yet connected to an agent."
+    },
+    {
+      "snippet": "AND crr.disconnect IS NULL",
+      "explanation": "Keep only contacts that have not ended."
+    },
+    {
+      "snippet": "EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - crr.enqueued))",
+      "explanation": "For each remaining contact, work out the time since it entered the queue, in seconds."
+    },
+    {
+      "snippet": "AVG(...)::int",
+      "explanation": "Average those wait times across all remaining contacts, then convert the result to a whole number."
+    },
+    {
+      "snippet": "COALESCE(..., 0) AS \"Wait Time AVG\"",
+      "explanation": "Show 0 instead of NULL when no contacts match, and name the output column \"Wait Time AVG\"."
+    }
+  ],
+  "improvements": [
+    "The values for $client and $ap_queues are placed directly into the SQL text. If your tool supports bound parameters, use them instead (in PostgreSQL, a list can be passed as an array and matched with = ANY(...)). This is safer and avoids quoting problems.",
+    "COALESCE(..., 0) makes 'nobody is waiting' look the same as 'average wait is 0 seconds'. If those need to be told apart, return NULL, or add COUNT(*) as a second column.",
+    "If queue_configuration could hold more than one row for the same queue_id and client, the join would repeat contacts and skew the average. Check that the pair is unique in that table, which you can do by looking at its definition."
+  ],
+  "rewritten_query": {
+    "query": "",
+    "reason": ""
+  },
+  "security": {
+    "level": "medium",
+    "findings": [
+      {
+        "reason": "$client (inside quotes) and $ap_queues (in an IN list, not quoted by the query) look like values the tool inserts as plain text before the query runs. If either value can be typed or influenced by a user, it could change the meaning of the query (SQL injection) or expose data the user should not see.",
+        "certainty": "possible",
+        "assumption": "The $client and $ap_queues values are substituted as plain text and can be influenced by a user, for example through free-text inputs, rather than coming from a fixed, trusted list.",
+        "how_to_verify": "In the tool that runs this query, check how the $client and $ap_queues variables are defined: a fixed list or a query-driven list is much safer than free text. Also check that the database account used only has SELECT permission, by inspecting its grants (for example by querying information_schema.role_table_grants for that role)."
+      }
+    ]
+  },
+  "danger": {
+    "level": "none",
+    "can_change_data": "no",
+    "data_change_summary": "Nothing can change: this is a plain SELECT that only reads data.",
+    "findings": []
+  },
+  "performance": {
+    "level": "none",
+    "findings": []
+  }
+}
+```
+
 ## Prerequisites
 
 - Node 22 or newer.
