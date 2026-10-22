@@ -2,6 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { hasTopLevelWhere, prepare, splitStatements } from '../src/index';
 
 describe('prepare', () => {
+  it('keeps tokens apart when a block comment sits between them', () => {
+    expect(prepare('DELETE/**/FROM t').stripped).toBe('DELETE FROM t');
+  });
+
   it('removes line and block comments', () => {
     const p = prepare('SELECT 1 -- trailing\n/* block\nspan */ FROM t');
     expect(p.raw).toContain('trailing');

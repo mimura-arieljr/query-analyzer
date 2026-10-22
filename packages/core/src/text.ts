@@ -70,6 +70,10 @@ export function prepare(sql: string): PreparedSql {
         stripped += ' ' + inner.stripped + ' ';
         i = close + 2;
       } else {
+        // A comment separates tokens: `DELETE/**/FROM` must not fuse into one word.
+        const before = stripped[stripped.length - 1];
+        const after = sql[close + 2];
+        if (before && after && !/\s/.test(before) && !/\s/.test(after)) emit(' ');
         i = close + 2;
       }
     } else if (c === "'") {
