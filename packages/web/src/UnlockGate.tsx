@@ -6,8 +6,6 @@ interface Props {
   notice?: string;
 }
 
-const SECRET_NAME = 'query-analyzer-shared-secret';
-
 function LockIcon() {
   return (
     <svg
@@ -28,6 +26,27 @@ function LockIcon() {
   );
 }
 
+function InfoIcon() {
+  return (
+    <svg
+      className="info-icon"
+      width="18"
+      height="18"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <circle cx="12" cy="12" r="10" />
+      <path d="M12 11v5" />
+      <path d="M12 7.5h.01" />
+    </svg>
+  );
+}
+
 export function UnlockGate({ onUnlock, notice }: Props) {
   const [secret, setSecret] = useState('');
   const [message, setMessage] = useState(notice ?? '');
@@ -35,11 +54,33 @@ export function UnlockGate({ onUnlock, notice }: Props) {
   const [invalid, setInvalid] = useState(Boolean(notice));
   const [checking, setChecking] = useState(false);
   const [shown, setShown] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
   const input = useRef<HTMLInputElement>(null);
+  const helpButton = useRef<HTMLButtonElement>(null);
+  const helpWrap = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     input.current?.focus();
   }, []);
+
+  // While the help is open: Escape or a click elsewhere closes it.
+  useEffect(() => {
+    if (!helpOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      setHelpOpen(false);
+      helpButton.current?.focus();
+    };
+    const onPress = (e: MouseEvent) => {
+      if (!helpWrap.current?.contains(e.target as Node)) setHelpOpen(false);
+    };
+    document.addEventListener('keydown', onKey);
+    document.addEventListener('mousedown', onPress);
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      document.removeEventListener('mousedown', onPress);
+    };
+  }, [helpOpen]);
 
   function refocus() {
     input.current?.focus();
@@ -89,7 +130,33 @@ export function UnlockGate({ onUnlock, notice }: Props) {
         This tool is private. Paste the shared secret that was created when it was deployed.
       </p>
 
-      <label htmlFor="secret">Secret</label>
+      <div className="label-row" ref={helpWrap}>
+        <label htmlFor="secret">Secret</label>
+        <button
+          ref={helpButton}
+          className="info-button"
+          type="button"
+          aria-label="Where do I find it?"
+          aria-expanded={helpOpen}
+          aria-controls="secret-help"
+          onClick={() => setHelpOpen(!helpOpen)}
+        >
+          <InfoIcon />
+        </button>
+        {helpOpen && (
+          <div className="help-panel" id="secret-help">
+            <ol>
+              <li>Open the AWS console in the region you deployed this app to.</li>
+              <li>
+                Go to Secrets Manager and open the secret named in the <code>SecretName</code> output of
+                the deploy (it is also on the stack's Outputs tab in CloudFormation).
+              </li>
+              <li>Choose Retrieve secret value and copy the value.</li>
+            </ol>
+            <p>Never paste it into chats, tickets or scripts.</p>
+          </div>
+        )}
+      </div>
       <p className="hint" id="secret-hint">
         Kept in this tab only. It is forgotten when you refresh the page.
       </p>
@@ -132,18 +199,6 @@ export function UnlockGate({ onUnlock, notice }: Props) {
       <p className="error" id="secret-error" role="alert">
         {message}
       </p>
-
-      <details className="help">
-        <summary>Where do I find the secret?</summary>
-        <ol>
-          <li>Open the AWS console and switch to the region ap-southeast-2 (Sydney).</li>
-          <li>
-            Go to Secrets Manager and open <code>{SECRET_NAME}</code>.
-          </li>
-          <li>Choose Retrieve secret value and copy the value.</li>
-        </ol>
-        <p className="muted">Never paste the secret into chats, tickets or scripts.</p>
-      </details>
     </form>
   );
 }

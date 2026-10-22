@@ -14,6 +14,7 @@
   --medium: #e3a72f;
   --high: #ff5c5c;
   --code-bg: #0e141b;
+  --panel: #070a0e;
   color-scheme: dark;
 }
 :root[data-theme='light'] {
@@ -30,6 +31,7 @@
   --medium: #9a6700;
   --high: #c62828;
   --code-bg: #f0f4f8;
+  --panel: #e8edf2;
   color-scheme: light;
 }
 * {
@@ -191,6 +193,12 @@ input[type='password']:focus {
 }
 .unlock label {
   display: block;
+}
+.label-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 4px;
   margin-top: 16px;
 }
 .secret-row {
@@ -211,28 +219,52 @@ input[aria-invalid='true'] {
 .unlock .actions .btn-primary {
   margin-left: 0;
 }
-.help {
-  margin-top: 20px;
-  padding-top: 12px;
-  border-top: 1px solid var(--border);
-  font-size: 14px;
-}
-.help summary {
-  cursor: pointer;
+.info-button {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
   color: var(--accent-text);
+  cursor: pointer;
 }
-.help ol {
-  margin: 10px 0 8px;
-  padding-left: 20px;
+.info-button:hover,
+.info-button[aria-expanded='true'] {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
 }
-.help li {
+.help-panel {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  z-index: 5;
+  margin-top: 6px;
+  padding: 12px 14px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+  font-weight: 400;
+}
+.help-panel ol {
+  margin: 0 0 8px;
+  padding-left: 18px;
+}
+.help-panel li {
   margin-bottom: 4px;
 }
-.help code {
-  font: 13px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  background: var(--code-bg);
-  padding: 2px 6px;
-  border-radius: 5px;
+.help-panel p {
+  margin: 0;
+}
+.help-panel code {
+  font: 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: var(--text);
   overflow-wrap: anywhere;
 }
 .error {
