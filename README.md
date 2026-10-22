@@ -116,7 +116,7 @@ The page keeps the secret in memory only, so a refresh asks for it again. Never 
 
 - Change the value in the Secrets Manager console (region `ap-southeast-2`).
 - The function reads the secret once per Lambda container and caches it. Warm containers keep accepting the old value until they are replaced.
-- To force the replacement, run a deploy that changes the function, for example a different `-c maxTokens` or `-c logRetentionDays` value, or any code change.
+- To force the replacement, run a deploy that changes the function, for example a different `-c maxTokens` or `-c temperature` value, or any code change.
 - Then test with both the old and the new value. This sequence has not been verified end to end.
 - Deleting the secret and redeploying does not regenerate it, and the name stays reserved during the deletion window.
 
