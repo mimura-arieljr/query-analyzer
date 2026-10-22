@@ -73,6 +73,16 @@ afterEach(() => {
 });
 
 describe('unlock', () => {
+  it('centres the unlock card with a gate layout, and drops it once unlocked', async () => {
+    vi.mocked(checkSecret).mockResolvedValue('ok');
+    const { container } = render(<App />);
+    expect(container.querySelector('.wrap')?.classList.contains('wrap-gate')).toBe(true);
+    fireEvent.change(screen.getByLabelText(/secret/i), { target: { value: 'pw' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Unlock' }));
+    await screen.findByLabelText(FORM_LABEL);
+    expect(container.querySelector('.wrap')?.classList.contains('wrap-gate')).toBe(false);
+  });
+
   it('shows the unlock box first and a wrong secret shows the message', async () => {
     vi.mocked(checkSecret).mockResolvedValue('wrong');
     render(<App />);

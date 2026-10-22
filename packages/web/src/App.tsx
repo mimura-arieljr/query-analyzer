@@ -55,7 +55,7 @@ export function App() {
   }, [theme]);
 
   return (
-    <div className="wrap">
+    <div className={secret === null ? 'wrap wrap-gate' : 'wrap'}>
       <header>
         <h1>
           Query <span>Analyzer</span>

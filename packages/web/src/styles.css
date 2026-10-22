@@ -48,6 +48,19 @@ body {
   margin: 0 auto;
   padding: 24px 16px 64px;
 }
+/* Unlock screen: auto margins centre the card under the header and never clip a tall card. */
+.wrap-gate {
+  min-height: 100vh;
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  /* The header takes space above the card, so extra bottom space makes the card sit at the true centre. */
+  padding-bottom: 80px;
+}
+.wrap-gate .unlock {
+  width: 100%;
+  margin: auto;
+}
 header {
   display: flex;
   align-items: center;
