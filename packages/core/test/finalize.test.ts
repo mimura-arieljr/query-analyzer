@@ -219,10 +219,56 @@ describe('finalize: rewrite guard for string-built SQL', () => {
     );
   });
 
-  it('keeps a parameterized rewrite wrapped in a db.query call', () => {
+  it('keeps a bare parameterized rewrite of a db.query-wrapped original', () => {
     const original = `db.query("UPDATE users SET name = '" + n + "' WHERE id = 1")`;
-    const rewrite = 'db.query("UPDATE users SET name = $1 WHERE id = 1", [n])';
+    expect(rewriteOf(original, UPDATE_P)).toEqual(KEPT(UPDATE_P));
+  });
+
+  it('keeps a parameterized rewrite of a Python %-formatted UPDATE with a tuple', () => {
+    const original = `"UPDATE users SET name = '%s' WHERE id = %s" % (n, i)`;
+    const rewrite = 'UPDATE users SET name = %s WHERE id = %s';
     expect(rewriteOf(original, rewrite)).toEqual(KEPT(rewrite));
+  });
+
+  it.each(['UPDATE users SET name = ? WHERE id = 1', 'UPDATE users SET name = :n WHERE id = 1', 'UPDATE users SET name = @n WHERE id = 1'])(
+    'keeps the placeholder style in %s',
+    (rewrite) => {
+      expect(rewriteOf(UPDATE_Q, rewrite)).toEqual(KEPT(rewrite));
+    },
+  );
+
+  // Wrapped rewrites are dropped on purpose: only bare SQL is compared safely.
+  it.each([
+    ['a wrapped call with a second call', `db.query("UPDATE users SET name = $1 WHERE id = 1", [n]); db.query("DROP TABLE users")`],
+    ['a wrapped call alone', `db.query("UPDATE users SET name = $1 WHERE id = 1", [n])`],
+    ['a wrapped call chained with ||', `db.query("UPDATE users SET name = $1 WHERE id = 1", [n]) || db.query("DROP TABLE users")`],
+    ['a wrapped call with {} args and a second call', `db.query("UPDATE users SET name = $1 WHERE id = 1", {}); db.query("DROP TABLE users", {})`],
+    ['another function', `child_process.execSync("UPDATE users SET name = $1 WHERE id = 1", [n])`],
+    ['a trailing second statement', `${UPDATE_P}; DROP TABLE users`],
+  ])('drops a rewrite with %s', (_name, rewrite) => {
+    expect(rewriteOf(UPDATE_Q, rewrite)).toEqual(CLEARED);
+  });
+
+  it('drops a wrapped DELETE that smuggles a statement into the arguments', () => {
+    const original = `"DELETE FROM users WHERE id = " + id`;
+    expect(rewriteOf(original, `db.query("DELETE FROM users WHERE id = $1", [id]); db.query("DELETE FROM users")`)).toEqual(CLEARED);
+    expect(rewriteOf(original, `db.query("DELETE FROM users WHERE id = $1", [id], "; TRUNCATE users")`)).toEqual(CLEARED);
+  });
+
+  it('drops a wrapped rewrite that changes the bound values', () => {
+    const original = `"UPDATE users SET role = '" + r + "' WHERE id = " + uid`;
+    const rewrite = `db.query("UPDATE users SET role = $1 WHERE id = $2", ['admin', uid])`;
+    expect(rewriteOf(original, rewrite)).toEqual(CLEARED);
+  });
+
+  it('drops a rewrite when the original % tail is followed by more SQL', () => {
+    const original = `"UPDATE users SET name = '%s'" % n + " WHERE id = 1"`;
+    expect(rewriteOf(original, 'UPDATE users SET name = %s')).toEqual(CLEARED);
+  });
+
+  it('drops a rewrite that has a high danger rule hit even if its shape matches', () => {
+    const original = `"DELETE FROM users WHERE id = " + id + " OR 1=1"`;
+    expect(rewriteOf(original, 'DELETE FROM users WHERE id = $1 OR 1=1')).toEqual(CLEARED);
   });
 
   it('keeps a parameterized rewrite of a SELECT the model said does not change data', () => {

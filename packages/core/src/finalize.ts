@@ -99,35 +99,54 @@ const JOINS: RegExp[] = [
   /'?%(?:\(\w+\))?s'?/g,
   /'?\{[^{}]*\}'?/g,
 ];
-// The `" % value` after a Python format string.
-const PERCENT_TAIL = /["']\s*%\s*[\w([{].*$/;
+// The `" % value` after a Python format string: one name, attribute or tuple to the end.
+const PERCENT_TAIL = /["']\s*%\s*(?:[\w.]+|\([^()]*\))\s*;?\s*$/;
 // Placeholders in a rewrite, each replaced by one `?`.
 const PLACEHOLDER = /'?(?:\$\d+|\?|%s|%\(\w+\)s|(?<!:):\w+|@\w+)'?/g;
-// db.query(" ... ", [args]) around a statement.
 const CALL_OPEN = /^[\w.]+\(\s*(?=["'`])/;
-const CALL_CLOSE = /(?:,\s*[[({].*)?\)\s*;?\s*$/;
+const SQL_START = /^(?:SELECT|INSERT|UPDATE|DELETE|WITH|REPLACE|MERGE)\b/i;
+
+// `db.query("...")` becomes `"..."`, only when it is one balanced call and nothing follows it but `;`.
+function unwrapCall(text: string): string {
+  const open = CALL_OPEN.exec(text);
+  if (!open) return text;
+  let depth = 1;
+  let quote = '';
+  for (let i = open[0].length; i < text.length; i++) {
+    const c = text[i];
+    if (quote) {
+      if (c === '\\') i++;
+      else if (c === quote) quote = '';
+    } else if (c === '"' || c === "'" || c === '`') {
+      quote = c;
+    } else if (c === '(') {
+      depth++;
+    } else if (c === ')' && --depth === 0) {
+      return /^\s*;?\s*$/.test(text.slice(i + 1)) ? text.slice(open[0].length, i) : text;
+    }
+  }
+  return text;
+}
 
 // The statement with values and quoting removed, so a string-built query and
 // its parameterized rewrite can be compared for the same shape.
 function skeleton(text: string, original: boolean): string {
   let t = text.trim().toLowerCase();
-  if (CALL_OPEN.test(t)) t = t.replace(CALL_OPEN, '').replace(CALL_CLOSE, '');
   if (original) {
-    t = t.replace(/^f(?=["'])/, '');
+    t = unwrapCall(t).trim().replace(/^f(?=["'])/, '');
     for (const re of JOINS) t = t.replace(re, '?');
-    t = t.replace(PERCENT_TAIL, '');
+    t = t.replace(PERCENT_TAIL, '').replace(/^["'`]/, '').replace(/["'`;\s]+$/, '');
   } else {
-    t = t.replace(PLACEHOLDER, '?');
+    t = t.replace(PLACEHOLDER, '?').replace(/[;\s]+$/, '');
   }
-  return t
-    .replace(/^[\s"'`]+/, '')
-    .replace(/[\s"'`;]+$/, '')
-    .replace(/\s+/g, ' ');
+  return t.replace(/\s+/g, ' ');
 }
 
-// For a string-built original, keep only a rewrite that is the same statement with parameters.
+// For a string-built original, keep only a bare-SQL rewrite with the same shape and parameters.
+// Known limitation: a rewrite wrapped in a call (db.query("...", [n])) is dropped.
 function isParameterized(query: string, rewrite: string, rewriteHits: RuleHit[]): boolean {
-  if (hasHit(rewriteHits, 'string-built-sql')) return false;
+  if (hasHit(rewriteHits, 'string-built-sql') || rank(floor(rewriteHits, 'danger')) >= rank('high')) return false;
+  if (!SQL_START.test(rewrite.trim())) return false;
   const want = skeleton(query, true);
   return want !== '' && want === skeleton(rewrite, false);
 }
