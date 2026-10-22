@@ -2,8 +2,6 @@ import { endOfDollarQuoted, hasTopLevelWhere, isEscapeString, prepare, splitStat
 import type { Dialect, PreparedSql } from './text';
 import type { Category, Certainty, Level } from './types';
 
-// Task 4 adds: 'string-built-sql' | 'hardcoded-password' | 'leading-wildcard-like'
-// | 'order-by-random' | 'logs-insights-read-only'.
 export type RuleId =
   | 'delete-update-no-where'
   | 'always-true-where'
@@ -13,7 +11,12 @@ export type RuleId =
   | 'insert-select-into'
   | 'grant-revoke'
   | 'replace-into'
-  | 'merge';
+  | 'merge'
+  | 'string-built-sql'
+  | 'hardcoded-password'
+  | 'leading-wildcard-like'
+  | 'order-by-random'
+  | 'logs-insights-read-only';
 
 export interface RuleHit {
   id: RuleId;
@@ -41,8 +44,23 @@ type RuleFn = (stmt: Stmt, hitsSoFar: RuleHit[]) => RuleHit[];
 
 type Spec = Omit<RuleHit, 'certainty' | 'assumption' | 'how_to_verify' | 'category'>;
 
-function certain(spec: Spec): RuleHit {
-  return { ...spec, category: 'danger', certainty: 'certain', assumption: '', how_to_verify: '' };
+interface Extra {
+  category: Category;
+  certainty: Certainty;
+  assumption: string;
+  how_to_verify: string;
+}
+
+function hit(spec: Spec, extra: Extra): RuleHit {
+  return { ...spec, ...extra };
+}
+
+function certain(spec: Spec, category: Category = 'danger'): RuleHit {
+  return hit(spec, { category, certainty: 'certain', assumption: '', how_to_verify: '' });
+}
+
+function possible(spec: Spec, category: Category, assumption: string, how_to_verify: string): RuleHit {
+  return hit(spec, { category, certainty: 'possible', assumption, how_to_verify });
 }
 
 const IDENT_CHAR = /[A-Za-z0-9_$]/;
@@ -352,6 +370,125 @@ const cteBodies: RuleFn = (s) =>
       })
     : [];
 
+const SQL_WORD = /\b(?:SELECT|INSERT|UPDATE|DELETE|WHERE|FROM)\b/i;
+const IDENT_START = String.raw`[A-Za-z_$]`;
+const IDENT_TAIL = String.raw`[\w$.\])]*`;
+// Ways SQL text gets joined to a value:
+// - a quote next to `+` and an identifier ("..." + name + "...")
+// - `${...}` in a template string
+// - an f-string with a `{name}` placeholder
+// - "...%s..." % value (a bare %s with a parameter tuple is not matched)
+const CONCAT_AFTER_QUOTE = new RegExp(String.raw`["'\`]\s*\+\s*${IDENT_START}`);
+const CONCAT_BEFORE_QUOTE = new RegExp(String.raw`(?<![\w$.])${IDENT_START}${IDENT_TAIL}\s*\+\s*["'\`]`);
+const TEMPLATE_HOLE = /\$\{[^}]+\}/;
+const F_STRING = /(?<![\w$])[fF](["'])(?:(?!\1)[^\n])*\{\s*[A-Za-z_]/;
+const PERCENT_FORMAT = /%(?:\(\w+\))?s[^%]{0,200}?["']\s*%\s*[A-Za-z_([{]/;
+
+const stringBuiltSql: RuleFn = (s) => {
+  const t = s.noComments;
+  const joined =
+    CONCAT_AFTER_QUOTE.test(t) ||
+    CONCAT_BEFORE_QUOTE.test(t) ||
+    TEMPLATE_HOLE.test(t) ||
+    F_STRING.test(t) ||
+    PERCENT_FORMAT.test(t);
+  return joined && SQL_WORD.test(t)
+    ? [
+        certain(
+          {
+            id: 'string-built-sql',
+            level: 'high',
+            reason:
+              'This looks like SQL built from user input by joining strings together, which can allow SQL injection.',
+            changesData: false,
+            matchesModel: /inject|concatenat|string[- ]built|built (from|with|by) (user|string)|user input/i,
+          },
+          'security',
+        ),
+      ]
+    : [];
+};
+
+// PASSWORD 'x' (PostgreSQL), IDENTIFIED [WITH plugin] BY 'x', SET PASSWORD [FOR u] = 'x' (MySQL).
+const PASSWORD_LITERAL =
+  /(?<![\w$.])(?:PASSWORD\s+['"]|IDENTIFIED\s+(?:WITH\s+\w+\s+)?BY\s+['"]|SET\s+PASSWORD\s+(?:FOR\s+\S+\s*)?=\s*['"])/i;
+
+const hardcodedPassword: RuleFn = (s) =>
+  PASSWORD_LITERAL.test(s.noComments)
+    ? [
+        certain(
+          {
+            id: 'hardcoded-password',
+            level: 'none',
+            reason: 'This statement has a password written directly in the SQL text.',
+            changesData: false,
+            matchesModel: /hard-?coded.*(password|credential)|(password|credential)s?\b.*\b(hard-?coded|plain ?text|in the (query|sql|statement))/i,
+          },
+          'security',
+        ),
+      ]
+    : [];
+
+const LEADING_WILDCARD = /\bI?LIKE\s+(?:BINARY\s+)?(?:[EN]\s*)?['"]%|\bI?LIKE\s+CONCAT\s*\(\s*['"]%/i;
+
+const leadingWildcardLike: RuleFn = (s) =>
+  LEADING_WILDCARD.test(s.noComments)
+    ? [
+        possible(
+          {
+            id: 'leading-wildcard-like',
+            level: 'low',
+            reason: 'This LIKE pattern starts with %, so the database usually cannot use an index and has to scan every row.',
+            changesData: false,
+            matchesModel: /leading wildcard|LIKE\s*'%|B-?tree/i,
+          },
+          'performance',
+          'The column has a standard B-tree index.',
+          'Run EXPLAIN (without ANALYZE) and look for a sequential scan.',
+        ),
+      ]
+    : [];
+
+// RAND( or RANDOM( inside an ORDER BY, not crossing into another clause.
+const ORDER_BY_RANDOM =
+  /\bORDER\s+BY\b(?:(?!\b(?:FROM|WHERE|SELECT|GROUP|HAVING|LIMIT|OFFSET|UNION)\b)[^;])*?\b(?:RAND|RANDOM)\s*\(/i;
+
+const orderByRandom: RuleFn = (s) =>
+  ORDER_BY_RANDOM.test(s.stripped)
+    ? [
+        possible(
+          {
+            id: 'order-by-random',
+            level: 'low',
+            reason: 'ORDER BY a random value makes the database compute and sort a random number for every row.',
+            changesData: false,
+            matchesModel: /RAND\(|RANDOM\(|ORDER BY RAND/i,
+          },
+          'performance',
+          'The table has many rows, so sorting all of them is costly.',
+          'Run EXPLAIN (without ANALYZE) and look for a sort over the whole table.',
+        ),
+      ]
+    : [];
+
+const LOGS_START = /^(?:fields|filter|stats|parse)\b/i;
+const LOGS_FORBIDDEN = /\b(?:SELECT|INSERT|UPDATE|DELETE|DROP|FROM)\b/i;
+
+// CloudWatch Logs Insights: starts with a Logs command and holds none of the SQL words.
+export function isLogsInsights(query: string): boolean {
+  const text = prepare(query, 'mysql').stripped.trim();
+  return LOGS_START.test(text) && !LOGS_FORBIDDEN.test(text);
+}
+
+const logsInsightsHit = (): RuleHit =>
+  certain({
+    id: 'logs-insights-read-only',
+    level: 'none',
+    reason: 'This is a CloudWatch Logs Insights query, which can only read log data.',
+    changesData: false,
+    matchesModel: /read[- ]only|only (reads?|queries|searches)|cannot (change|modify|delete)|does not (change|modify)/i,
+  });
+
 // Order matters: withWhere reads the hits earlier rules made for the statement,
 // so cteBodies runs after it.
 const RULES: RuleFn[] = [
@@ -365,6 +502,10 @@ const RULES: RuleFn[] = [
   grantRevoke,
   replaceInto,
   merge,
+  stringBuiltSql,
+  hardcodedPassword,
+  leadingWildcardLike,
+  orderByRandom,
 ];
 
 const BALANCED = String.raw`(?:\((?:[^()]|\([^()]*\))*\))`;
@@ -454,6 +595,8 @@ const hitKey = (h: RuleHit) => `${h.id}\u0000${h.reason}`;
 // - Run both readings, since the dialect is not known here.
 // - Per (rule, reason), keep the larger count seen in either reading.
 export function runRules(query: string): RuleHit[] {
+  // Not SQL: only the whole-query hit applies.
+  if (isLogsInsights(query)) return [logsInsightsHit()];
   const mysql = runReading(query, 'mysql');
   const have = new Map<string, number>();
   for (const h of mysql) have.set(hitKey(h), (have.get(hitKey(h)) ?? 0) + 1);
