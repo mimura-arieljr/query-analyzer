@@ -1,6 +1,6 @@
 # Query Analyzer
 
-Paste a PostgreSQL, MySQL or CloudWatch Logs Insights query and get a plain-language explanation plus findings for danger, security and performance. A rules layer checks the query text itself, so the danger warnings (for example a `DELETE` with no `WHERE`) do not depend on the model getting it right. Nothing is stored. Each person deploys their own copy as one stack in their own AWS account.
+Paste a PostgreSQL, MySQL or CloudWatch Logs Insights query and get a plain-language explanation plus findings for danger, security and performance. A rules layer checks the SQL text itself, so the danger warnings (for example a `DELETE` with no `WHERE`) do not depend on the model getting it right. When the paste looks like application code, the rules also check SQL in its string literals. SQL assembled at runtime from parts, or run through `EXECUTE`, is not analysed by the rules. Nothing is stored. Each person deploys their own copy as one stack in their own AWS account.
 
 ## How it works
 
@@ -20,6 +20,21 @@ Paste a PostgreSQL, MySQL or CloudWatch Logs Insights query and get a plain-lang
 npm install
 npx cdk bootstrap aws://<account-id>/ap-southeast-2
 ```
+
+### Check Lambda concurrency first
+
+The stack reserves Lambda concurrency (`concurrencyCap`, default 5) as a spend brake. Lambda keeps a minimum unreserved pool for the account, so an account with a low concurrency limit cannot reserve any, and the default deploy then fails. New accounts may have a low limit: the account used while building this project had 10. See the Lambda docs on reserved concurrency for the exact rule.
+
+Check your limit before the first deploy (look at `AccountLimit.ConcurrentExecutions`):
+
+```sh
+aws lambda get-account-settings --region ap-southeast-2
+```
+
+If it is low, pick one:
+
+- Request a Lambda "Concurrent executions" quota increase in Service Quotas, and wait for it before deploying. The usual default is 1,000.
+- Or deploy with `-c concurrencyCap=0`. This reserves nothing, and the account limit is then the only cap. Record it in `cdk.json` so later deploys keep it (see [Remembering settings](#remembering-settings)).
 
 ## One-time Bedrock setup (per model)
 
@@ -54,7 +69,7 @@ The default inference profile id is `global.anthropic.claude-haiku-4-5-20251001-
 - `global.` (default): Bedrock may process a pasted query in any commercial AWS region. There is no data-residency promise. It is about 10% cheaper. Logs and data at rest stay in `ap-southeast-2`. It can fail where an AWS Organizations policy blocks other regions.
 - `au.`: processing stays in `ap-southeast-2` and `ap-southeast-4`.
 
-To use `au.`, add this to the deploy command. The foundation model id does not change.
+To use `au.`, add this to every deploy command, or record it once in `cdk.json` (see [Remembering settings](#remembering-settings)). A later deploy without it moves the stack back to `global.`. The foundation model id does not change.
 
 ```sh
 -c inferenceProfileId=au.anthropic.claude-haiku-4-5-20251001-v1:0
@@ -67,6 +82,8 @@ From the repo root (run `npm install` first if you have not):
 ```sh
 npm run deploy -- -c budgetEmail=you@example.com
 ```
+
+**`-c` values are not remembered between deploys. Pass the same ones every time, or record them in `packages/infra/cdk.json` (see [Remembering settings](#remembering-settings)). Otherwise a later deploy silently goes back to the defaults, for example `global.` processing and `concurrencyCap=5`.**
 
 `npm run deploy` builds the web app and then runs `cdk deploy` in `packages/infra`. Everything after `--` goes to `cdk deploy`. The first deploy takes several minutes. When it finishes, the outputs show `SiteUrl` and `SecretName`.
 
@@ -86,20 +103,27 @@ Pass each one as `-c name=value`. Only `budgetEmail` is required.
 | `logRetentionDays` | `14` | Lambda log retention. Must be a value CloudWatch Logs supports. |
 | `temperature` | not set | Sampling temperature. If not set, the model default applies. |
 
-### If the deploy fails on Lambda concurrency
+### Remembering settings
 
-New AWS accounts may have a low Lambda concurrency limit. The account used while building this project had a limit of 10. Lambda will not reserve concurrency if that would leave too little unreserved for the rest of the account. The exact minimum for small-limit accounts is not confirmed here, so check the Lambda docs. With the default `concurrencyCap=5`, the deploy then fails with an error that mentions unreserved concurrency.
+A `-c` value applies to that one command only. CDK does not store it, so the next deploy without it uses the default again. To keep your settings, add them to the `context` block of `packages/infra/cdk.json`. CDK reads that file on every synth, deploy and destroy, and a `-c` value on the command line still overrides it. Keep the existing `app` and `output` lines:
 
-Check your limit:
-
-```sh
-aws lambda get-account-settings
+```json
+{
+  "app": "npx tsx bin/app.ts",
+  "output": "cdk.out",
+  "context": {
+    "budgetEmail": "you@example.com",
+    "inferenceProfileId": "au.anthropic.claude-haiku-4-5-20251001-v1:0",
+    "concurrencyCap": "0"
+  }
+}
 ```
 
-Two fixes:
+Then `npm run deploy` needs no `-c` values. Numbers can be written as `"0"` or `0`. `cdk.json` is tracked by git, so do not commit your real email to a public repo. Keep the change local, or use a private fork.
 
-- Request a Lambda "Concurrent executions" quota increase in Service Quotas before deploying. The usual default is 1,000.
-- Or deploy with `-c concurrencyCap=0`. This reserves nothing, and the account limit is then the only cap.
+### If the deploy fails on Lambda concurrency
+
+With the default `concurrencyCap=5` on an account with a low concurrency limit, the deploy fails with an error that mentions unreserved concurrency. See [Check Lambda concurrency first](#check-lambda-concurrency-first) for the check and the two ways out. For example:
 
 ```sh
 npm run deploy -- -c budgetEmail=you@example.com -c concurrencyCap=0
@@ -147,7 +171,7 @@ cd packages/infra
 npx cdk destroy -c budgetEmail=you@example.com
 ```
 
-Use the same `-c` values you used for deploy.
+Use the same `-c` values you used for deploy, unless they are recorded in `cdk.json`.
 
 - The site bucket is retained by design. Empty and delete it by hand.
 - The secret may stay scheduled for deletion for a recovery window. Check the console before redeploying with the same name.
@@ -155,7 +179,7 @@ Use the same `-c` values you used for deploy.
 ## Known limits
 
 - The rules are pattern matching on text, not a SQL parser.
-- SQL hidden in dynamic strings built at runtime, or run through `EXECUTE`, is not analysed by the rules.
+- The rules analyse SQL text, including SQL in the string literals of application code when the paste looks like code. SQL assembled at runtime from parts, or run through `EXECUTE`, is not analysed by the rules.
 - Rewrites are dropped for statements that change data, except parameterizing string-built SQL. Wrapped driver calls are dropped too.
 - Other languages are explained best-effort by the model, without the rule checks.
 - The model can be wrong. Treat results as a review aid.
