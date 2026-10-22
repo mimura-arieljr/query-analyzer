@@ -13,13 +13,13 @@ Paste a PostgreSQL, MySQL or CloudWatch Logs Insights query and get a plain-lang
 
 - Node 22 or newer.
 - AWS credentials for the target account in your shell.
-- One-time CDK bootstrap. The stack is fixed to `ap-southeast-2`, so bootstrap that region:
+- An email address for the budget alert.
+- Dependencies installed, then a one-time CDK bootstrap. Run both from the repo root. The stack is fixed to `ap-southeast-2`, so bootstrap that region:
 
 ```sh
+npm install
 npx cdk bootstrap aws://<account-id>/ap-southeast-2
 ```
-
-- An email address for the budget alert.
 
 ## One-time Bedrock setup (per model)
 
@@ -62,8 +62,9 @@ To use `au.`, add this to the deploy command. The foundation model id does not c
 
 ## Deploy
 
+From the repo root (run `npm install` first if you have not):
+
 ```sh
-npm install
 npm run deploy -- -c budgetEmail=you@example.com
 ```
 
@@ -87,7 +88,7 @@ Pass each one as `-c name=value`. Only `budgetEmail` is required.
 
 ### If the deploy fails on Lambda concurrency
 
-New AWS accounts have a Lambda concurrency limit of 10. Lambda does not let a function reserve concurrency if fewer than 10 would stay unreserved. With the default `concurrencyCap=5`, the deploy fails in such an account with an error about the unreserved concurrency minimum.
+New AWS accounts may have a low Lambda concurrency limit. The account used while building this project had a limit of 10. Lambda will not reserve concurrency if that would leave too little unreserved for the rest of the account. The exact minimum for small-limit accounts is not confirmed here, so check the Lambda docs. With the default `concurrencyCap=5`, the deploy then fails with an error that mentions unreserved concurrency.
 
 Check your limit:
 
@@ -97,8 +98,8 @@ aws lambda get-account-settings
 
 Two fixes:
 
-- Request a Lambda "Concurrent executions" quota increase of at least 100 in Service Quotas, then deploy again.
-- Or deploy with `-c concurrencyCap=0`. This reserves nothing, and the account limit then acts as the cap.
+- Request a Lambda "Concurrent executions" quota increase in Service Quotas before deploying. The usual default is 1,000.
+- Or deploy with `-c concurrencyCap=0`. This reserves nothing, and the account limit is then the only cap.
 
 ```sh
 npm run deploy -- -c budgetEmail=you@example.com -c concurrencyCap=0
@@ -111,7 +112,13 @@ npm run deploy -- -c budgetEmail=you@example.com -c concurrencyCap=0
 
 The page keeps the secret in memory only, so a refresh asks for it again. Never paste the secret into chats or scripts.
 
-To rotate it, change the value in Secrets Manager (or delete the secret and redeploy) and use the new value.
+### Rotating the secret
+
+- Change the value in the Secrets Manager console (region `ap-southeast-2`).
+- The function reads the secret once per Lambda container and caches it. Warm containers keep accepting the old value until they are replaced.
+- To force the replacement, run a deploy that changes the function, for example a different `-c maxTokens` or `-c logRetentionDays` value, or any code change.
+- Then test with both the old and the new value. This sequence has not been verified end to end.
+- Deleting the secret and redeploying does not regenerate it, and the name stays reserved during the deletion window.
 
 The first request after a deploy can be slow, because the output format is compiled once and cached for about 24 hours. Later calls take roughly 3 to 17 seconds.
 
@@ -132,10 +139,15 @@ The first request after a deploy can be slow, because the output format is compi
 
 ## Removing it
 
+`cdk destroy` loads the same app as deploy, so it needs `budgetEmail` and the built web app. `packages/web/dist` is git-ignored and missing on a fresh clone, so build it first if needed:
+
 ```sh
+npm run build -w @qa/web
 cd packages/infra
-npx cdk destroy
+npx cdk destroy -c budgetEmail=you@example.com
 ```
+
+Use the same `-c` values you used for deploy.
 
 - The site bucket is retained by design. Empty and delete it by hand.
 - The secret may stay scheduled for deletion for a recovery window. Check the console before redeploying with the same name.
