@@ -91,8 +91,10 @@ export class QueryAnalyzerStack extends Stack {
       memorySize: 512,
       logGroup,
       environment,
-      // New accounts have a Lambda concurrency limit of 10, and Lambda refuses a reservation that leaves
-      // the unreserved pool under 10, so a reserved cap fails there. Use 0 to skip it.
+      // Reserved concurrency (0 skips it):
+      // - Lambda keeps a minimum unreserved pool for the account.
+      // - Accounts with a low concurrency limit cannot reserve any (this project's account had 10).
+      // - See the Lambda docs on reserved concurrency for the exact rule.
       ...(props.concurrencyCap > 0 ? { reservedConcurrentExecutions: props.concurrencyCap } : {}),
       // Bundle the SDK: the runtime one may be too old for Converse outputConfig.
       bundling: { externalModules: [] },

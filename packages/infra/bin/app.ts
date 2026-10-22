@@ -1,17 +1,11 @@
 import { App } from 'aws-cdk-lib';
 import type { OutputMode } from '@qa/backend';
+import { numberSetting, webDistPathFrom } from '../lib/app-config';
 import { QueryAnalyzerStack } from '../lib/stack';
 
 const app = new App();
 const ctx = (key: string): unknown => app.node.tryGetContext(key);
-
-function num(key: string, fallback: number | undefined): number | undefined {
-  const raw = ctx(key);
-  if (raw === undefined || raw === '') return fallback;
-  const n = Number(raw);
-  if (!Number.isFinite(n)) throw new Error(`Context "${key}" must be a number, got "${String(raw)}"`);
-  return n;
-}
+const num = (key: string, fallback: number | undefined) => numberSetting(key, ctx(key), fallback);
 
 function str(key: string, fallback: string): string {
   const raw = ctx(key);
@@ -30,7 +24,7 @@ if (outputMode !== 'structured' && outputMode !== 'tool' && outputMode !== 'json
 
 new QueryAnalyzerStack(app, 'QueryAnalyzerStack', {
   env: { region: 'ap-southeast-2', account: process.env.CDK_DEFAULT_ACCOUNT },
-  webDistPath: new URL('../../web/dist', import.meta.url).pathname,
+  webDistPath: webDistPathFrom(import.meta.url),
   budgetEmail,
   inferenceProfileId: str('inferenceProfileId', 'global.anthropic.claude-haiku-4-5-20251001-v1:0'),
   foundationModelId: str('foundationModelId', 'anthropic.claude-haiku-4-5-20251001-v1:0'),
