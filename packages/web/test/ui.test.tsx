@@ -187,6 +187,32 @@ describe('ResultView', () => {
     );
   });
 
+  it('keeps "only reads data" for can_change_data no at level none', () => {
+    render(<ResultView analysis={makeAnalysis()} />);
+    const text = screen.getByRole('alert').textContent ?? '';
+    expect(text).toContain('Danger: none');
+    expect(text).toContain('This query only reads data.');
+  });
+
+  it('does not say "only reads data" under a danger level above none', () => {
+    render(
+      <ResultView
+        analysis={makeAnalysis({
+          danger: {
+            level: 'high',
+            findings: [finding({ reason: 'This GRANT statement changes who is allowed to access the database.' })],
+            can_change_data: 'no',
+            data_change_summary: '',
+          },
+        })}
+      />,
+    );
+    const text = screen.getByRole('alert').textContent ?? '';
+    expect(text).toContain('Danger: high');
+    expect(text).toContain('This query does not change table rows, but see the danger findings below.');
+    expect(text).not.toContain('only reads data');
+  });
+
   it('shows language and confidence chips, the dialect note and the detailed text', () => {
     render(
       <ResultView

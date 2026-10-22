@@ -33,7 +33,10 @@ function dangerLine(danger: DangerResult<FinalFinding>): string {
     case 'yes':
       return summary ? `This query changes data: ${summary}` : 'This query changes data.';
     case 'no':
-      return 'This query only reads data.';
+      // GRANT and similar change no rows but still carry danger.
+      return danger.level === 'none'
+        ? 'This query only reads data.'
+        : 'This query does not change table rows, but see the danger findings below.';
     default:
       return summary
         ? `Unclear whether this query changes data: ${summary}`
