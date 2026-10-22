@@ -1,7 +1,6 @@
 import Ajv from 'ajv/dist/2020';
 import type { ModelAnalysis } from './types';
 
-// Copied verbatim from the v1 prompt-and-schema draft (JSON schema section).
 export const ANALYSIS_SCHEMA = {
   "type": "object",
   "additionalProperties": false,
