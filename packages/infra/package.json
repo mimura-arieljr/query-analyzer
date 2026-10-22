@@ -6,7 +6,8 @@
   "scripts": {
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "synth": "cdk synth"
+    "synth": "cdk synth",
+    "deploy": "cdk deploy"
   },
   "dependencies": {
     "@qa/backend": "*",
