@@ -188,12 +188,54 @@ If the agreement is not available, it can be created with the `ListFoundationMod
 
 ### Switching to another model
 
-For each model you want to use, repeat this checklist:
+For a Claude model reached through a `global.` or `au.` inference profile, switching is a settings change. No code changes.
 
-- Its own first-time-use form and Marketplace agreement.
-- Its own tokens per minute quota above 0.
-- Support for structured output through the Converse API. If it has none, try `-c outputMode=tool` or `-c outputMode=json` (see the settings table).
-- Deploy, then run a few test queries before relying on it.
+1. **Find the ids.** List the profiles available in the stack's region, then pick the model:
+
+   ```sh
+   aws bedrock list-inference-profiles --region ap-southeast-2 \
+     --query "inferenceProfileSummaries[].inferenceProfileId"
+   ```
+
+   - The inference profile id is the prefix plus the foundation model id, for example `global.<foundation-model-id>`.
+   - Choose `global.` or `au.` as described in [`global.` or `au.` inference profile](#global-or-au-inference-profile).
+   - Confirm the model exists: `aws bedrock get-foundation-model --model-identifier <foundation-model-id> --region ap-southeast-2`.
+
+2. **Do the one-time Bedrock setup for the new model** (see above), using its own foundation model id:
+   - Its own first-time-use form and Marketplace agreement.
+   - Its own tokens per minute quota above 0.
+
+3. **Change the CDK settings.** Set both ids, and change them together:
+
+   ```json
+   "context": {
+     "inferenceProfileId": "global.<foundation-model-id>",
+     "foundationModelId": "<foundation-model-id>"
+   }
+   ```
+
+   - Put them in the `context` block of `packages/infra/cdk.json` (see [Remembering settings](#remembering-settings)), or pass `-c inferenceProfileId=... -c foundationModelId=...` on every deploy.
+   - The Lambda function calls `inferenceProfileId`. The IAM permission is built from both ids in `packages/infra/lib/stack.ts` and `packages/infra/lib/bedrock-arns.ts`.
+   - If only `inferenceProfileId` changes, the IAM permission still points at the old model and calls fail with `AccessDeniedException`.
+
+4. **Adjust the optional settings if needed:**
+   - `outputMode`: if the model does not support structured output through the Converse API, use `-c outputMode=tool` or `-c outputMode=json`. The function also falls back from `structured` to `tool` to `json` on its own after a `ValidationException`.
+   - `maxTokens` and `temperature`: see the settings table. Some models reject certain `temperature` values, so leave it unset if calls fail with a `ValidationException`.
+
+5. **Deploy and test.** Run `npm run deploy` (with the same `-c` values if they are not in `cdk.json`). Then run a few test queries, including a `DELETE` with no `WHERE`, and check the Lambda log line for the inference profile, token counts and error code before relying on it.
+
+6. **Roll back** by putting the previous two ids back and deploying again.
+
+When the stack code has to change:
+
+- **A profile prefix other than `global.` or `au.`** (for example `apac.`): deploy fails with `Unsupported inference profile prefix`.
+  1. Add the prefix to `SUPPORTED_PREFIXES` in `packages/infra/lib/bedrock-arns.ts`.
+  2. Add a branch in `foundationModelArns` that returns the foundation model ARN for each region the profile can route to.
+  3. Add a test in `packages/infra/test/bedrock-arns.test.ts`. The existing test uses `us.` as the unsupported example, so change that example if you add `us.`.
+- **A model with no inference profile** (called by its plain foundation model id): not supported by the stack today. It needs a change to `foundationModelArns`, and `inferenceProfileArn` in `stack.ts` would no longer apply.
+- **A model that is not Claude**: the IAM and settings steps are the same, but the project has only been tested with Claude models. Check that the model returns valid JSON for the schema, and compare its answers with the rule findings on your own queries.
+
+The [Cost](#cost) section quotes Haiku prices. Check the price of the new model.
 
 ## `global.` or `au.` inference profile
 
