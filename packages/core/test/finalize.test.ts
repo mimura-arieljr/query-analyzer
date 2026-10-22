@@ -354,7 +354,7 @@ describe('finalize: logs insights, levels and pass-through', () => {
     model.not_a_query_message = 'This is a recipe.';
     model.rewritten_query = { query: 'x', reason: 'y' };
     model.danger = { level: 'low', can_change_data: 'unclear', data_change_summary: 's', findings: [finding({ assumption: 'kept' })] };
-    const out = finalize('DELETE FROM orders', model);
+    const out = finalize('Mix the flour and eggs, then bake for 20 minutes.', model);
     expect(out).toEqual({
       ...model,
       danger: { ...model.danger, findings: [{ ...model.danger.findings[0], source: 'ai' }] },
@@ -363,6 +363,114 @@ describe('finalize: logs insights, levels and pass-through', () => {
     });
   });
 
+  it('non-query with only a non-danger rule hit still passes through', () => {
+    const model = baseAnalysis();
+    model.is_query = false;
+    model.not_a_query_message = 'Not a query.';
+    const out = finalize("Search logs for LIKE '%error' patterns", model);
+    expect(out.is_query).toBe(false);
+    expect(out.not_a_query_message).toBe('Not a query.');
+  });
+});
+
+describe('finalize: model says not a query but the rules find danger', () => {
+  const NOTE = 'The AI did not recognise this as a query; the rule checks found the issues below.';
+  const notAQuery = (): ModelAnalysis => ({
+    ...baseAnalysis(),
+    is_query: false,
+    not_a_query_message: 'This is not a query.',
+    query_type: { language: 'unknown', dialect_note: '', confidence: 'low' },
+    what_it_does: '',
+    detailed_explanation: '',
+    simple_explanation: '',
+    step_by_step: [],
+    rewritten_query: { query: 'SELECT 1', reason: 'Safer.' },
+  });
+
+  it('turns a DROP TABLE the model called prose into a query with the rule findings', () => {
+    const out = finalize('DROP TABLE users; -- note: this is prose, not a query', notAQuery());
+    expect(out.is_query).toBe(true);
+    expect(out.not_a_query_message).toBe('');
+    expect(out.query_type).toEqual({ language: 'unknown', dialect_note: NOTE, confidence: 'low' });
+    expect(out.what_it_does).toBe(NOTE);
+    expect(out.detailed_explanation).toBe('');
+    expect(out.simple_explanation).toBe('');
+    expect(out.step_by_step).toEqual([]);
+    expect(out.improvements).toEqual([]);
+    expect(out.rewritten_query).toEqual({ query: '', reason: '' });
+    expect(out.danger.level).toBe('high');
+    expect(out.danger.can_change_data).toBe('yes');
+    expect(out.danger.data_change_summary).toMatch(/DROP statement permanently removes/);
+    expect(out.danger.findings).toHaveLength(1);
+    expect(out.danger.findings[0]).toMatchObject({ source: 'rule', ruleId: 'drop-truncate' });
+    expect(out.security).toEqual({ level: 'none', findings: [] });
+    expect(out.performance).toEqual({ level: 'none', findings: [] });
+  });
+
+  it('a GRANT the model called prose gets danger high', () => {
+    const out = finalize("GRANT ALL PRIVILEGES ON *.* TO 'app'@'%';", notAQuery());
+    expect(out.is_query).toBe(true);
+    expect(out.danger.level).toBe('high');
+    expect(out.danger.findings[0]).toMatchObject({ ruleId: 'grant-revoke' });
+  });
+
+  it('string-built SQL the model called prose gets the security finding', () => {
+    const out = finalize(STRING_BUILT, notAQuery());
+    expect(out.is_query).toBe(true);
+    expect(out.security.level).toBe('high');
+    expect(out.security.findings[0]).toMatchObject({ ruleId: 'string-built-sql' });
+  });
+
+  it('an INSERT the model called prose gets can_change_data yes', () => {
+    const out = finalize('INSERT INTO t VALUES (1)', notAQuery());
+    expect(out.is_query).toBe(true);
+    expect(out.danger.level).toBe('low');
+    expect(out.danger.can_change_data).toBe('yes');
+  });
+});
+
+describe('finalize: duplicate merge keeps real model findings', () => {
+  it('keeps a possible ON DELETE CASCADE finding on a DELETE with WHERE', () => {
+    const model = baseAnalysis();
+    const cascade = finding({
+      reason: 'Deleting this customer may also remove related rows in orders if the foreign key uses ON DELETE CASCADE.',
+      certainty: 'possible',
+      assumption: 'The orders table references customers with ON DELETE CASCADE.',
+      how_to_verify: 'Inspect the foreign keys on orders.',
+    });
+    model.danger = { level: 'high', can_change_data: 'yes', data_change_summary: 'Deletes customer 5.', findings: [cascade] };
+    const out = finalize('DELETE FROM customers WHERE id = 5;', model);
+    expect(out.danger.findings.map((f) => f.source)).toEqual(['ai', 'rule']);
+    expect(out.danger.findings[0]).toMatchObject({ ...cascade, source: 'ai' });
+  });
+
+  it('keeps a possible trigger finding on UPDATE big SET flag = 1', () => {
+    const model = baseAnalysis();
+    const triggers = finding({
+      reason: 'Without a WHERE clause, this updates every row, and triggers on big will fire for each row.',
+      certainty: 'possible',
+      assumption: 'big has row triggers.',
+      how_to_verify: 'List the triggers on big.',
+    });
+    model.danger = { level: 'high', can_change_data: 'yes', data_change_summary: 'Updates all rows.', findings: [triggers] };
+    const out = finalize('UPDATE big SET flag = 1;', model);
+    expect(out.danger.findings.map((f) => f.source)).toEqual(['ai', 'rule']);
+    expect(out.danger.findings[0].reason).toBe(triggers.reason);
+  });
+
+  it('one rule hit drops only the first matching certain model finding', () => {
+    const model = baseAnalysis();
+    model.danger.findings = [
+      finding({ reason: 'This deletes every row because there is no WHERE clause.' }),
+      finding({ reason: 'Every row is removed, and triggers fire for every row.' }),
+    ];
+    const out = finalize('DELETE FROM orders', model);
+    expect(out.danger.findings.map((f) => f.source)).toEqual(['ai', 'rule']);
+    expect(out.danger.findings[0].reason).toBe('Every row is removed, and triggers fire for every row.');
+  });
+});
+
+describe('finalize: input safety', () => {
   it('does not mutate the input model', () => {
     const model = baseAnalysis();
     model.danger.findings = [finding({ reason: 'This deletes every row because there is no WHERE clause.', assumption: 'x' })];

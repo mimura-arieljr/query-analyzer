@@ -38,14 +38,21 @@ function fromHit(h: RuleHit): FinalFinding {
 const blankIfCertain = (f: FinalFinding): FinalFinding =>
   f.certainty === 'certain' ? { ...f, assumption: '', how_to_verify: '' } : f;
 
-// A model finding is a duplicate only in the same category AND when a hit's regex matches its reason.
-function dropDuplicates(findings: FinalFinding[], hits: RuleHit[]): FinalFinding[] {
-  return findings.filter((f) => !hits.some((h) => h.matchesModel.test(f.reason)));
+// A model finding is a duplicate only when it is certain, in the hit's category and matched by its regex.
+// - Each hit drops at most one model finding (the first match).
+// - Possible model findings are always kept.
+function dropDuplicates(findings: FinalFinding[], hits: RuleHit[], category: Category): FinalFinding[] {
+  const kept = [...findings];
+  for (const h of hits.filter((x) => x.category === category)) {
+    const i = kept.findIndex((f) => f.certainty === 'certain' && h.matchesModel.test(f.reason));
+    if (i !== -1) kept.splice(i, 1);
+  }
+  return kept;
 }
 
 // Level of a category: the highest of the model's level and every hit's level.
-function mergeCategory(model: CategoryResult, hits: RuleHit[]): CategoryResult<FinalFinding> {
-  const kept = dropDuplicates(model.findings.map(tagAi), hits);
+function mergeCategory(model: CategoryResult, hits: RuleHit[], category: Category): CategoryResult<FinalFinding> {
+  const kept = dropDuplicates(model.findings.map(tagAi), hits, category);
   const level = hits.reduce<Level>((acc, h) => maxLevel(acc, h.level), model.level);
   const findings = [...kept, ...hits.map(fromHit)].map(blankIfCertain);
   return { level, findings };
@@ -59,7 +66,7 @@ function topChangeHit(hits: RuleHit[]): RuleHit | undefined {
 }
 
 function mergeDanger(model: DangerResult, hits: RuleHit[]): DangerResult<FinalFinding> {
-  const base = mergeCategory(model, hits);
+  const base = mergeCategory(model, hits, 'danger');
   const change = topChangeHit(hits);
   if (!change) return { ...base, can_change_data: model.can_change_data, data_change_summary: model.data_change_summary };
   return {
@@ -167,25 +174,58 @@ function guardRewrite(query: string, model: ModelAnalysis, hits: RuleHit[]): Rew
   return changesData ? NO_REWRITE : rewrite;
 }
 
-// Rules only raise warnings. The one exception is a Logs Insights query, which is read-only.
-export function finalize(query: string, model: ModelAnalysis): FinalAnalysis {
-  if (!model.is_query) {
-    return {
-      ...model,
-      security: { ...model.security, findings: model.security.findings.map(tagAi) },
-      danger: { ...model.danger, findings: model.danger.findings.map(tagAi) },
-      performance: { ...model.performance, findings: model.performance.findings.map(tagAi) },
-    };
-  }
-  const hits = runRules(query);
+const NOT_RECOGNISED = 'The AI did not recognise this as a query; the rule checks found the issues below.';
+
+// Hits strong enough to override the model's "not a query".
+const overridesNonQuery = (h: RuleHit) =>
+  (h.category === 'danger' && h.level !== 'none') || h.changesData || h.id === 'string-built-sql';
+
+// Stand-in for the model when it called the text "not a query" but the rules flagged it.
+function rulesOnlyModel(): ModelAnalysis {
+  const empty = { level: 'none' as const, findings: [] };
+  return {
+    is_query: true,
+    not_a_query_message: '',
+    query_type: { language: 'unknown', dialect_note: NOT_RECOGNISED, confidence: 'low' },
+    what_it_does: NOT_RECOGNISED,
+    detailed_explanation: '',
+    simple_explanation: '',
+    step_by_step: [],
+    improvements: [],
+    rewritten_query: NO_REWRITE,
+    security: empty,
+    danger: { ...empty, can_change_data: 'unclear', data_change_summary: '' },
+    performance: empty,
+  };
+}
+
+function passThrough(model: ModelAnalysis): FinalAnalysis {
+  return {
+    ...model,
+    security: { ...model.security, findings: model.security.findings.map(tagAi) },
+    danger: { ...model.danger, findings: model.danger.findings.map(tagAi) },
+    performance: { ...model.performance, findings: model.performance.findings.map(tagAi) },
+  };
+}
+
+function merge(query: string, model: ModelAnalysis, hits: RuleHit[]): FinalAnalysis {
   const logs = hasHit(hits, 'logs-insights-read-only');
   const rest = hits.filter((h) => h.id !== 'logs-insights-read-only');
   const inCategory = (c: Category) => rest.filter((h) => h.category === c);
   return {
     ...model,
-    security: raiseEmptyLevel(mergeCategory(model.security, inCategory('security'))),
+    security: raiseEmptyLevel(mergeCategory(model.security, inCategory('security'), 'security')),
     danger: logs ? logsDanger() : raiseEmptyLevel(mergeDanger(model.danger, inCategory('danger'))),
-    performance: raiseEmptyLevel(mergeCategory(model.performance, inCategory('performance'))),
+    performance: raiseEmptyLevel(mergeCategory(model.performance, inCategory('performance'), 'performance')),
     rewritten_query: guardRewrite(query, model, hits),
   };
+}
+
+// Merges the model reply with the rule hits:
+// - Rules only raise warnings, except that a Logs Insights query is read-only.
+// - A "not a query" reply passes through unless the rules find danger, a data change or string-built SQL.
+export function finalize(query: string, model: ModelAnalysis): FinalAnalysis {
+  const hits = runRules(query);
+  if (model.is_query) return merge(query, model, hits);
+  return hits.some(overridesNonQuery) ? merge(query, rulesOnlyModel(), hits) : passThrough(model);
 }

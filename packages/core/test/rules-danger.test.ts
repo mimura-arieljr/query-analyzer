@@ -174,3 +174,64 @@ describe('danger rules: evasion attempts', () => {
     expect(ids('DELETE t1 FROM t1 JOIN t2 ON t1.id = t2.id')).toContain('delete-update-no-where');
   });
 });
+
+describe('danger rules: SQL inside application code', () => {
+  const danger = (q: string) => runRules(q).filter((h) => h.category === 'danger').map((h) => h.id);
+
+  it.each([
+    ['db.query("DELETE FROM orders")', 'delete-update-no-where'],
+    ["cursor.execute('DELETE FROM orders')", 'delete-update-no-where'],
+    ['db.query(`DELETE FROM orders`)', 'delete-update-no-where'],
+    ['stmt.executeUpdate("TRUNCATE TABLE logs");', 'drop-truncate'],
+    ['$pdo->exec("DELETE FROM sessions");', 'delete-update-no-where'],
+    ['sql = "DROP TABLE " + name', 'drop-truncate'],
+    ['"DELETE FROM orders WHERE id = " + id', 'delete-update-with-where'],
+    ['with conn.cursor() as cur:\n    cur.execute("DELETE FROM orders")', 'delete-update-no-where'],
+  ])('flags %s', (q, id) => {
+    expect(danger(q)).toEqual([id]);
+  });
+
+  it('gives "DROP TABLE " + name the string-built-sql hit too', () => {
+    expect(ids('sql = "DROP TABLE " + name')).toContain('string-built-sql');
+    expect(ids('"DELETE FROM orders WHERE id = " + id')).toContain('string-built-sql');
+  });
+
+  it('reads a \\n escape in a code string as a line break', () => {
+    expect(danger('String q = "DELETE FROM orders\\nWHERE id = 1";')).toEqual(['delete-update-with-where']);
+  });
+
+  it('reads concatenated pieces together', () => {
+    expect(danger(`"UPDATE users SET name = '" + n + "' WHERE id = 1"`)).toEqual(['delete-update-with-where']);
+    expect(danger(`"DELETE FROM users WHERE id = " + id + " OR 1=1"`)).toEqual(['always-true-where']);
+  });
+
+  it('counts each code string once', () => {
+    expect(danger('db.query("DELETE FROM a"); db.query("DELETE FROM b");')).toEqual([
+      'delete-update-no-where',
+      'delete-update-no-where',
+    ]);
+  });
+
+  it('does not read string literals inside plain SQL', () => {
+    expect(ids("INSERT INTO log VALUES ('DELETE FROM x')")).toEqual(['insert-select-into']);
+    expect(ids("SELECT 'DELETE FROM x'")).toEqual([]);
+    expect(ids('SELECT "DELETE FROM x"')).toEqual([]);
+    expect(ids('SELECT 1')).toEqual([]);
+  });
+
+  it('stays quiet on code without risky SQL and on Logs Insights', () => {
+    expect(ids('console.log("hello world")')).toEqual([]);
+    expect(danger('db.query("SELECT * FROM orders")')).toEqual([]);
+    expect(ids('fields @timestamp, @message | filter @message like /ERROR/ | sort @timestamp desc')).toEqual([
+      'logs-insights-read-only',
+    ]);
+    expect(ids("fields @message | filter @message like 'DELETE FROM'")).toEqual(['logs-insights-read-only']);
+    expect(danger('fields @message | filter @message like "DROP"')).toEqual([]);
+    expect(ids("SHOW TABLES LIKE 'DELETE FROM%'")).toEqual([]);
+    expect(danger('log("DELETE")')).toEqual([]);
+  });
+
+  it('a // comment with an apostrophe does not hide a later code string', () => {
+    expect(danger('// don\'t do this\ndb.query("DELETE FROM orders")')).toEqual(['delete-update-no-where']);
+  });
+});
