@@ -1,4 +1,7 @@
 {
   "app": "npx tsx bin/app.ts",
-  "output": "cdk.out"
+  "output": "cdk.out",
+  "context": {
+    "concurrencyCap": 0
+  }
 }
