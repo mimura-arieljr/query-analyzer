@@ -23,8 +23,26 @@ const LANGUAGE_LABEL: Record<QueryType['language'], string> = {
   unknown: 'Unknown',
 };
 
+const LEVEL_BARS: Record<Level, number> = { none: 0, low: 1, medium: 2, high: 3 };
+
+// Three rising bars, filled up to the level; the label stays the accessible text.
+function Meter({ level }: { level: Level }) {
+  return (
+    <span className="meter" aria-hidden="true">
+      {[1, 2, 3].map((n) => (
+        <i key={n} className={n <= LEVEL_BARS[level] ? 'on' : undefined} />
+      ))}
+    </span>
+  );
+}
+
 function Badge({ level }: { level: Level }) {
-  return <span className={`badge ${level}`}>{LEVEL_LABEL[level]}</span>;
+  return (
+    <span className={`badge ${level}`}>
+      <Meter level={level} />
+      {LEVEL_LABEL[level]}
+    </span>
+  );
 }
 
 function dangerLine(danger: DangerResult<FinalFinding>): string {
@@ -47,7 +65,10 @@ function dangerLine(danger: DangerResult<FinalFinding>): string {
 function Banner({ danger }: { danger: DangerResult<FinalFinding> }) {
   return (
     <div className={`banner ${danger.level}`} role="alert">
-      <span className="tag">Danger: {danger.level}</span>
+      <span className="tag">
+        <Meter level={danger.level} />
+        Danger: {danger.level}
+      </span>
       <p>{dangerLine(danger)}</p>
     </div>
   );

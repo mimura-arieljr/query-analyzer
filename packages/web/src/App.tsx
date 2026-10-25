@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { ErrorCode } from '@qa/core/types';
+import { Mark } from './Mark';
 import { QueryForm } from './QueryForm';
 import { ResultView } from './ResultView';
 import { UnlockGate } from './UnlockGate';
@@ -56,16 +57,23 @@ function Workspace({ secret, onUnauthorized }: { secret: string; onUnauthorized:
   }, [error, onUnauthorized]);
 
   return (
-    <>
+    <div className="workspace">
       <QueryForm onAnalyze={run} onClear={clear} busy={status === 'loading'} />
-      <section className="result" aria-live="polite">
-        {status === 'loading' && <p className="muted">Analyzing...</p>}
-        {status === 'error' && error && error !== 'unauthorized' && (
-          <p className="error">{ERROR_TEXT[error]}</p>
+      <div className="out">
+        {status === 'idle' && (
+          <div className="placeholder" aria-hidden="true">
+            The verdict, a plain reading and the findings appear here.
+          </div>
         )}
-        {status === 'done' && result && <ResultView analysis={result} />}
-      </section>
-    </>
+        <section className="result" aria-live="polite">
+          {status === 'loading' && <p className="muted loading">Analyzing...</p>}
+          {status === 'error' && error && error !== 'unauthorized' && (
+            <p className="error">{ERROR_TEXT[error]}</p>
+          )}
+          {status === 'done' && result && <ResultView analysis={result} />}
+        </section>
+      </div>
+    </div>
   );
 }
 
@@ -84,6 +92,7 @@ export function App() {
       <header>
         {secret !== null && (
           <h1>
+            <Mark />
             Query <span>Analyzer</span>
           </h1>
         )}
