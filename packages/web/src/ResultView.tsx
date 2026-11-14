@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import type {
   CategoryResult,
   DangerResult,
@@ -24,6 +24,11 @@ const LANGUAGE_LABEL: Record<QueryType['language'], string> = {
 };
 
 const LEVEL_BARS: Record<Level, number> = { none: 0, low: 1, medium: 2, high: 3 };
+
+// Sections rise in one after another; `i` is the section's place in that order.
+function rise(i: number): CSSProperties {
+  return { '--i': i } as CSSProperties;
+}
 
 // Three rising bars, filled up to the level; the label stays the accessible text.
 function Meter({ level }: { level: Level }) {
@@ -64,8 +69,8 @@ function dangerLine(danger: DangerResult<FinalFinding>): string {
 
 function Banner({ danger }: { danger: DangerResult<FinalFinding> }) {
   return (
-    <div className={`banner ${danger.level}`} role="alert">
-      <span className="tag">
+    <div className={`banner ${danger.level} rv`} role="alert" style={rise(0)}>
+      <span className={danger.level === 'high' ? 'tag pulse' : 'tag'}>
         <Meter level={danger.level} />
         Danger: {danger.level}
       </span>
@@ -105,10 +110,18 @@ function FindingItem({ finding }: { finding: FinalFinding }) {
   );
 }
 
-function CategoryCard({ title, result }: { title: string; result: CategoryResult<FinalFinding> }) {
+function CategoryCard({
+  title,
+  result,
+  index,
+}: {
+  title: string;
+  result: CategoryResult<FinalFinding>;
+  index: number;
+}) {
   const { level, findings } = result;
   return (
-    <div className="card">
+    <div className="card rv" style={rise(index)}>
       <div className="cat-head">
         <h2>{title}</h2>
         <Badge level={level} />
@@ -123,7 +136,7 @@ function CategoryCard({ title, result }: { title: string; result: CategoryResult
   );
 }
 
-function RewriteCard({ query, reason }: { query: string; reason: string }) {
+function RewriteCard({ query, reason, index }: { query: string; reason: string; index: number }) {
   const [label, setLabel] = useState('Copy');
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   useEffect(() => () => clearTimeout(timer.current), []);
@@ -141,7 +154,7 @@ function RewriteCard({ query, reason }: { query: string; reason: string }) {
   }
 
   return (
-    <div className="card">
+    <div className="card rv" style={rise(index)}>
       <div className="cat-head">
         <h2>Rewritten query</h2>
         <button type="button" className="btn-ghost small" onClick={() => void copy()}>
@@ -159,17 +172,19 @@ function RewriteCard({ query, reason }: { query: string; reason: string }) {
 export function ResultView({ analysis }: { analysis: FinalAnalysis }) {
   if (!analysis.is_query) {
     return (
-      <div className="card">
+      <div className="card rv" style={rise(0)}>
         <p>{analysis.not_a_query_message}</p>
       </div>
     );
   }
   const { query_type: qt } = analysis;
+  // Banner is 0 and "What it does" is 1; the rest count on from there.
+  let i = 2;
   return (
     <>
       <Banner danger={analysis.danger} />
 
-      <div className="card">
+      <div className="card rv" style={rise(1)}>
         <h2>What it does</h2>
         <div className="meta">
           <span className="chip accent">{LANGUAGE_LABEL[qt.language]}</span>
@@ -189,7 +204,7 @@ export function ResultView({ analysis }: { analysis: FinalAnalysis }) {
       </div>
 
       {analysis.step_by_step.length > 0 && (
-        <div className="card">
+        <div className="card rv" style={rise(i++)}>
           <h2>Step by step</h2>
           <table>
             <thead>
@@ -213,13 +228,13 @@ export function ResultView({ analysis }: { analysis: FinalAnalysis }) {
       )}
 
       <div className="cats">
-        <CategoryCard title="Security" result={analysis.security} />
-        <CategoryCard title="Danger" result={analysis.danger} />
-        <CategoryCard title="Performance" result={analysis.performance} />
+        <CategoryCard title="Security" result={analysis.security} index={i++} />
+        <CategoryCard title="Danger" result={analysis.danger} index={i++} />
+        <CategoryCard title="Performance" result={analysis.performance} index={i++} />
       </div>
 
       {analysis.improvements.length > 0 && (
-        <div className="card">
+        <div className="card rv" style={rise(i++)}>
           <h2>Improvements</h2>
           <ul>
             {analysis.improvements.map((tip, i) => (
@@ -233,6 +248,7 @@ export function ResultView({ analysis }: { analysis: FinalAnalysis }) {
         <RewriteCard
           query={analysis.rewritten_query.query}
           reason={analysis.rewritten_query.reason}
+          index={i++}
         />
       )}
     </>

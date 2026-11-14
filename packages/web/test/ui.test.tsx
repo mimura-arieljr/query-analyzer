@@ -369,6 +369,44 @@ describe('ResultView', () => {
   });
 });
 
+describe('motion in the app', () => {
+  it('shows the wait panel and scan line, then the results with staggered sections', async () => {
+    vi.stubGlobal('matchMedia', (q: string) => ({ matches: false, media: q }));
+    vi.mocked(analyze).mockResolvedValue({
+      ok: true,
+      analysis: makeAnalysis({ danger: { level: 'high', findings: [], can_change_data: 'yes', data_change_summary: '' } }),
+    });
+    await unlock();
+    analyzeText('delete from users');
+    expect(screen.getByRole('status').textContent).toContain('Working out the query language');
+    expect(screen.getByRole('button', { name: 'Analyze' }).hasAttribute('disabled')).toBe(true);
+    await waitFor(() => expect(document.querySelector('.query-field.scanning')).toBeTruthy(), { timeout: 2000 });
+    expect(await screen.findByText('Reads all users.', {}, { timeout: 4000 })).toBeTruthy();
+    expect(screen.queryByRole('status')).toBeNull();
+    expect(document.querySelector('.query-field.scanning')).toBeNull();
+    const order = [...document.querySelectorAll<HTMLElement>('.rv')].map((el) => el.style.getPropertyValue('--i'));
+    expect(order).toEqual(['0', '1', '2', '3', '4', '5']);
+    expect(document.querySelector('.banner .tag.pulse')).toBeTruthy();
+  });
+
+  it('errors skip the wait panel', async () => {
+    vi.stubGlobal('matchMedia', (q: string) => ({ matches: false, media: q }));
+    vi.mocked(analyze).mockResolvedValue({ ok: false, error: 'throttled', message: 'x' });
+    await unlock();
+    analyzeText('select 1');
+    expect(await screen.findByText('Too many requests. Wait a moment and try again.')).toBeTruthy();
+    expect(screen.queryByRole('status')).toBeNull();
+  });
+
+  it('without motion the results show as soon as they arrive', async () => {
+    vi.mocked(analyze).mockResolvedValue({ ok: true, analysis: makeAnalysis() });
+    await unlock();
+    analyzeText('select 1');
+    expect(await screen.findByText('Reads all users.')).toBeTruthy();
+    expect(document.querySelector('.query-field.scanning')).toBeNull();
+  });
+});
+
 describe('errors', () => {
   it('each error code shows its fixed message', async () => {
     const cases: [ErrorCode, string][] = [

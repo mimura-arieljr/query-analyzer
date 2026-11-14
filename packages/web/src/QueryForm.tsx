@@ -7,9 +7,11 @@ interface Props {
   onAnalyze: (query: string) => void;
   onClear: () => void;
   busy: boolean;
+  // True while the wait panel is on its "risky patterns" step: a line sweeps the query.
+  scanning?: boolean;
 }
 
-export function QueryForm({ onAnalyze, onClear, busy }: Props) {
+export function QueryForm({ onAnalyze, onClear, busy, scanning = false }: Props) {
   const [text, setText] = useState('');
   const tooLong = text.length > MAX_QUERY_CHARS;
   const disabled = busy || tooLong || text.trim() === '';
@@ -26,13 +28,15 @@ export function QueryForm({ onAnalyze, onClear, busy }: Props) {
         Tested on PostgreSQL, MySQL and CloudWatch Logs Insights. Anything else is explained on a
         best-effort basis, with lower confidence.
       </p>
-      <textarea
-        id="query"
-        spellCheck={false}
-        aria-describedby="query-hint query-count"
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-      />
+      <div className={scanning ? 'query-field scanning' : 'query-field'}>
+        <textarea
+          id="query"
+          spellCheck={false}
+          aria-describedby="query-hint query-count"
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+        />
+      </div>
       <div className="actions">
         <button className="btn-primary" type="submit" disabled={disabled}>
           Analyze

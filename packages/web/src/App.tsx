@@ -1,10 +1,12 @@
-import { useEffect, useState } from 'react';
-import type { ErrorCode } from '@qa/core/types';
+import { useCallback, useEffect, useState } from 'react';
+import type { ErrorCode, FinalAnalysis } from '@qa/core/types';
 import { Mark } from './Mark';
+import { prefersReducedMotion } from './motion';
 import { QueryForm } from './QueryForm';
 import { ResultView } from './ResultView';
 import { UnlockGate } from './UnlockGate';
 import { useAnalyzer } from './useAnalyzer';
+import { WaitPanel } from './WaitPanel';
 
 type Theme = 'dark' | 'light';
 
@@ -52,13 +54,20 @@ function initialTheme(): Theme {
 function Workspace({ secret, onUnauthorized }: { secret: string; onUnauthorized: () => void }) {
   const { status, result, error, run, clear } = useAnalyzer(secret);
 
+  // The wait panel stays up until it has finished ticking, even when the answer is fast.
+  const [revealed, setRevealed] = useState<FinalAnalysis | null>(null);
+  const waiting = status === 'loading' || (status === 'done' && result !== null && result !== revealed);
+  const onFinished = useCallback(() => setRevealed(result), [result]);
+  const [waitStep, setWaitStep] = useState(0);
+  const scanning = waiting && waitStep === 1 && !prefersReducedMotion();
+
   useEffect(() => {
     if (error === 'unauthorized') onUnauthorized();
   }, [error, onUnauthorized]);
 
   return (
     <div className="workspace">
-      <QueryForm onAnalyze={run} onClear={clear} busy={status === 'loading'} />
+      <QueryForm onAnalyze={run} onClear={clear} busy={waiting} scanning={scanning} />
       <div className="out">
         {status === 'idle' && (
           <div className="placeholder" aria-hidden="true">
@@ -66,11 +75,11 @@ function Workspace({ secret, onUnauthorized }: { secret: string; onUnauthorized:
           </div>
         )}
         <section className="result" aria-live="polite">
-          {status === 'loading' && <p className="muted loading">Analyzing...</p>}
+          {waiting && <WaitPanel done={status === 'done'} onFinished={onFinished} onStep={setWaitStep} />}
           {status === 'error' && error && error !== 'unauthorized' && (
             <p className="error">{ERROR_TEXT[error]}</p>
           )}
-          {status === 'done' && result && <ResultView analysis={result} />}
+          {status === 'done' && result && !waiting && <ResultView analysis={result} />}
         </section>
       </div>
     </div>
