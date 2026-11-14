@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ErrorCode, FinalAnalysis, FinalFinding } from '@qa/core/types';
+import type { AnalyzeResponse, ErrorCode, FinalAnalysis, FinalFinding } from '@qa/core/types';
 import { analyze, checkSecret } from '../src/api';
 import { App } from '../src/App';
 import { ResultView } from '../src/ResultView';
@@ -136,6 +136,30 @@ describe('QueryForm', () => {
     expect(screen.getByText('20,001 / 20,000 characters')).toBeTruthy();
   });
 
+  it('formats a query pasted into the empty box, and Format reformats it', async () => {
+    await unlock();
+    const box = screen.getByLabelText(FORM_LABEL) as HTMLTextAreaElement;
+    const format = screen.getByRole('button', { name: 'Format' }) as HTMLButtonElement;
+    expect(format.disabled).toBe(true);
+    fireEvent.paste(box, { clipboardData: { getData: () => '    select id from users where a = 1' } });
+    await waitFor(() => expect(box.value).toBe('select\n  id\nfrom\n  users\nwhere\n  a = 1'));
+
+    fireEvent.change(box, { target: { value: 'select id from t' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Format' }));
+    await waitFor(() => expect(box.value).toBe('select\n  id\nfrom\n  t'));
+  });
+
+  it('leaves a paste into the middle of a query as it is', async () => {
+    await unlock();
+    const box = screen.getByLabelText(FORM_LABEL) as HTMLTextAreaElement;
+    fireEvent.change(box, { target: { value: 'select  from t' } });
+    box.setSelectionRange(7, 7);
+    const event = fireEvent.paste(box, { clipboardData: { getData: () => 'id' } });
+    // Not cancelled, so the browser inserts the text itself.
+    expect(event).toBe(true);
+    expect(box.value).toBe('select  from t');
+  });
+
   it('Clear empties the text and the result', async () => {
     vi.mocked(analyze).mockResolvedValue({ ok: true, analysis: makeAnalysis() });
     await unlock();
@@ -172,8 +196,9 @@ describe('ResultView', () => {
         banner.compareDocumentPosition(heading) & Node.DOCUMENT_POSITION_FOLLOWING,
       ).toBeTruthy();
     }
-    const dangerCard = screen.getByRole('heading', { name: 'Danger' }).closest('.card') as HTMLElement;
+    const dangerCard = screen.getByRole('heading', { name: 'Danger' }).closest('.cat') as HTMLElement;
     expect(within(dangerCard).getByText('High')).toBeTruthy();
+    expect(within(dangerCard).getByText('1 finding')).toBeTruthy();
   });
 
   it('words the banner for read-only and unclear queries', () => {
@@ -302,10 +327,11 @@ describe('ResultView', () => {
         analysis={makeAnalysis({ security: { level: 'medium', findings: [] } })}
       />,
     );
-    const card = screen.getByRole('heading', { name: 'Security' }).closest('.card') as HTMLElement;
+    const card = screen.getByRole('heading', { name: 'Security' }).closest('.cat') as HTMLElement;
     expect(within(card).getByText('Medium')).toBeTruthy();
     expect(within(card).getByText('No specific issue listed')).toBeTruthy();
-    const quiet = screen.getByRole('heading', { name: 'Performance' }).closest('.card') as HTMLElement;
+    const quiet = screen.getByRole('heading', { name: 'Performance' }).closest('.cat') as HTMLElement;
+    expect(within(quiet).getByText('0 findings')).toBeTruthy();
     expect(within(quiet).queryByText('No specific issue listed')).toBeNull();
     expect(within(quiet).getByText('No findings.')).toBeTruthy();
   });
@@ -370,23 +396,65 @@ describe('ResultView', () => {
 });
 
 describe('motion in the app', () => {
-  it('shows the wait panel and scan line, then the results with staggered sections', async () => {
+  it('scans the query while waiting, then shows the results with staggered sections', async () => {
     vi.stubGlobal('matchMedia', (q: string) => ({ matches: false, media: q }));
-    vi.mocked(analyze).mockResolvedValue({
-      ok: true,
-      analysis: makeAnalysis({ danger: { level: 'high', findings: [], can_change_data: 'yes', data_change_summary: '' } }),
-    });
+    let answer: (v: AnalyzeResponse) => void = () => {};
+    vi.mocked(analyze).mockReturnValue(new Promise((r) => (answer = r)));
     await unlock();
     analyzeText('delete from users');
     expect(screen.getByRole('status').textContent).toContain('Working out the query language');
     expect(screen.getByRole('button', { name: 'Analyze' }).hasAttribute('disabled')).toBe(true);
-    await waitFor(() => expect(document.querySelector('.query-field.scanning')).toBeTruthy(), { timeout: 2000 });
+    // The query turns into code, and the scan steps through its words.
+    expect(document.querySelector('.qview')?.textContent).toBe('delete from users');
+    await waitFor(() => expect(document.querySelector('.t.scan')).toBeTruthy(), { timeout: 2000 });
+    answer({
+      ok: true,
+      analysis: makeAnalysis({ danger: { level: 'high', findings: [], can_change_data: 'yes', data_change_summary: '' } }),
+    });
     expect(await screen.findByText('Reads all users.', {}, { timeout: 4000 })).toBeTruthy();
     expect(screen.queryByRole('status')).toBeNull();
-    expect(document.querySelector('.query-field.scanning')).toBeNull();
+    expect(document.querySelector('.t.scan')).toBeNull();
     const order = [...document.querySelectorAll<HTMLElement>('.rv')].map((el) => el.style.getPropertyValue('--i'));
-    expect(order).toEqual(['0', '1', '2', '3', '4', '5']);
-    expect(document.querySelector('.banner .tag.pulse')).toBeTruthy();
+    expect(order).toEqual(['0', '1', '2', '3']);
+    expect(document.querySelector('.verdict .tag.pulse')).toBeTruthy();
+  });
+
+  it('hovering a step lights up its part of the query', async () => {
+    vi.mocked(analyze).mockResolvedValue({
+      ok: true,
+      analysis: makeAnalysis({
+        step_by_step: [
+          { snippet: 'SELECT  *', explanation: 'Picks all columns.' },
+          { snippet: 'FROM users', explanation: 'Reads the users table.' },
+          { snippet: 'LIMIT 5', explanation: 'Not in the query.' },
+        ],
+      }),
+    });
+    await unlock();
+    analyzeText('select * from users');
+    await screen.findByText('Reads all users.');
+    const lit = () => [...document.querySelectorAll('.qview .t.hl')].map((el) => el.textContent).join('');
+    const row = screen.getByText('Reads the users table.').closest('tr') as HTMLElement;
+    fireEvent.mouseEnter(row);
+    expect(lit()).toBe('from users');
+    fireEvent.mouseLeave(row);
+    expect(lit()).toBe('');
+    fireEvent.focus(screen.getByText('Picks all columns.').closest('tr') as HTMLElement);
+    expect(lit()).toBe('select *');
+    // A part the query does not contain is not hoverable.
+    expect(screen.getByText('Not in the query.').closest('tr')?.getAttribute('tabindex')).toBeNull();
+  });
+
+  it('Edit turns the code back into the text box', async () => {
+    vi.mocked(analyze).mockResolvedValue({ ok: true, analysis: makeAnalysis() });
+    await unlock();
+    analyzeText('select 1');
+    await screen.findByText('Reads all users.');
+    expect(screen.queryByLabelText(FORM_LABEL)).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    const box = screen.getByLabelText(FORM_LABEL) as HTMLTextAreaElement;
+    expect(box.value).toBe('select 1');
+    expect(document.activeElement).toBe(box);
   });
 
   it('errors skip the wait panel', async () => {

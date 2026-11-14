@@ -1,6 +1,6 @@
-import { act, cleanup, render } from '@testing-library/react';
+import { act, cleanup, render, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { prefersReducedMotion } from '../src/motion';
+import { prefersReducedMotion, useScan } from '../src/motion';
 import { WaitPanel } from '../src/WaitPanel';
 
 function stubMotion(reduce: boolean) {
@@ -97,5 +97,25 @@ describe('WaitPanel', () => {
     const { rerender } = render(<WaitPanel done={false} onFinished={onFinished} />);
     rerender(<WaitPanel done onFinished={onFinished} />);
     expect(onFinished).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('useScan', () => {
+  it('steps through the parts while active, looping', () => {
+    stubMotion(false);
+    const { result } = renderHook(() => useScan(true, 3, 110));
+    expect(result.current).toBe(0);
+    advance(110);
+    expect(result.current).toBe(1);
+    advance(220);
+    expect(result.current).toBe(0);
+  });
+
+  it('returns null when inactive, empty or with reduced motion', () => {
+    stubMotion(false);
+    expect(renderHook(() => useScan(false, 3, 110)).result.current).toBeNull();
+    expect(renderHook(() => useScan(true, 0, 110)).result.current).toBeNull();
+    stubMotion(true);
+    expect(renderHook(() => useScan(true, 3, 110)).result.current).toBeNull();
   });
 });

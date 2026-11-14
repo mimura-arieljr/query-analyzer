@@ -51,7 +51,11 @@ export function WaitPanel({ done, onFinished, onStep }: Props) {
         {WAIT_STEPS.map((s, i) => (
           <li key={s} className={i < current ? 'done' : i === current ? 'on' : ''}>
             <span className="dot" aria-hidden="true">
-              {i < current ? '✓' : ''}
+              {i < current && (
+                <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+                  <path d="M2 5.2 4.1 7.3 8 3" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              )}
             </span>
             {s}
           </li>
