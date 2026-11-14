@@ -8,19 +8,22 @@ export function useAnalyzer(secret: string) {
   const [status, setStatus] = useState<Status>('idle');
   const [result, setResult] = useState<FinalAnalysis | null>(null);
   const [error, setError] = useState<ErrorCode | null>(null);
+  // The query of the latest run, so the result can point back into it.
+  const [query, setQuery] = useState<string | null>(null);
   // Refs so rapid calls see current values before React re-renders.
   const requestId = useRef(0);
   const loading = useRef(false);
 
   const run = useCallback(
-    (query: string) => {
+    (q: string) => {
       if (loading.current) return;
       loading.current = true;
       const id = ++requestId.current;
       setStatus('loading');
+      setQuery(q);
       setResult(null);
       setError(null);
-      void analyze(query, secret).then((res) => {
+      void analyze(q, secret).then((res) => {
         if (id !== requestId.current) return;
         loading.current = false;
         if (res.ok) {
@@ -39,9 +42,10 @@ export function useAnalyzer(secret: string) {
     requestId.current++;
     loading.current = false;
     setStatus('idle');
+    setQuery(null);
     setResult(null);
     setError(null);
   }, []);
 
-  return { status, result, error, run, clear };
+  return { status, result, error, query, run, clear };
 }

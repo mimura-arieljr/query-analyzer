@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { ErrorCode, FinalAnalysis } from '@qa/core/types';
 import { Mark } from './Mark';
-import { prefersReducedMotion } from './motion';
+import { useScan } from './motion';
+import { lineRanges, wordRanges, type Range } from './query';
 import { QueryForm } from './QueryForm';
 import { ResultView } from './ResultView';
 import { UnlockGate } from './UnlockGate';
@@ -51,35 +52,79 @@ function initialTheme(): Theme {
   return light ? 'light' : 'dark';
 }
 
+// The verdict and "What it does" at their real size, values as flat bars, while the answer is on its way.
+function Ghost() {
+  return (
+    <div className="ghost" aria-hidden="true">
+      <div className="panel">
+        <i className="bar tag" />
+        <i className="bar big" />
+        <i className="bar big short" />
+      </div>
+      <div className="panel">
+        <i className="bar title" />
+        <i className="bar" />
+        <i className="bar short" />
+      </div>
+    </div>
+  );
+}
+
+// Scan speed per unit: words while checking for risky patterns, lines while explaining each part.
+const WORD_MS = 110;
+const LINE_MS = 380;
+
 function Workspace({ secret, onUnauthorized }: { secret: string; onUnauthorized: () => void }) {
-  const { status, result, error, run, clear } = useAnalyzer(secret);
+  const { status, result, error, query, run, clear } = useAnalyzer(secret);
 
   // The wait panel stays up until it has finished ticking, even when the answer is fast.
   const [revealed, setRevealed] = useState<FinalAnalysis | null>(null);
   const waiting = status === 'loading' || (status === 'done' && result !== null && result !== revealed);
   const onFinished = useCallback(() => setRevealed(result), [result]);
   const [waitStep, setWaitStep] = useState(0);
-  const scanning = waiting && waitStep === 1 && !prefersReducedMotion();
+
+  // Step 1 scans the query word by word, step 2 line by line.
+  const words = useMemo(() => wordRanges(query ?? ''), [query]);
+  const lines = useMemo(() => lineRanges(query ?? ''), [query]);
+  const wordIndex = useScan(waiting && waitStep === 1, words.length, WORD_MS);
+  const lineIndex = useScan(waiting && waitStep >= 2, lines.length, LINE_MS);
+  const scan = (wordIndex !== null ? words[wordIndex] : lineIndex !== null ? lines[lineIndex] : null) ?? null;
+
+  // Parts of the query lit up by hovering a step; a new run or a cleared page drops them.
+  const [highlight, setHighlight] = useState<Range[]>([]);
+  const onHighlight = useCallback((r: Range | null) => setHighlight(r ? [r] : []), []);
+  useEffect(() => setHighlight([]), [status]);
 
   useEffect(() => {
     if (error === 'unauthorized') onUnauthorized();
   }, [error, onUnauthorized]);
 
+  const shown = status === 'done' && result !== null && !waiting;
+
   return (
     <div className="workspace">
-      <QueryForm onAnalyze={run} onClear={clear} busy={waiting} scanning={scanning} />
+      <QueryForm
+        onAnalyze={run}
+        onClear={clear}
+        busy={waiting}
+        hasResult={shown}
+        analyzed={query}
+        highlight={highlight}
+        scan={waiting ? scan : null}
+      />
       <div className="out">
         {status === 'idle' && (
           <div className="placeholder" aria-hidden="true">
-            The verdict, a plain reading and the findings appear here.
+            The verdict, a plain reading of each part and the findings appear here.
           </div>
         )}
         <section className="result" aria-live="polite">
           {waiting && <WaitPanel done={status === 'done'} onFinished={onFinished} onStep={setWaitStep} />}
+          {waiting && <Ghost />}
           {status === 'error' && error && error !== 'unauthorized' && (
             <p className="error">{ERROR_TEXT[error]}</p>
           )}
-          {status === 'done' && result && !waiting && <ResultView analysis={result} />}
+          {shown && result && <ResultView analysis={result} query={query ?? ''} onHighlight={onHighlight} />}
         </section>
       </div>
     </div>

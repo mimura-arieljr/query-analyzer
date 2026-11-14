@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type CSSProperties } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import type {
   CategoryResult,
   DangerResult,
@@ -7,6 +7,8 @@ import type {
   Level,
   QueryType,
 } from '@qa/core/types';
+import { findInOrder, type Range } from './query';
+import { Code } from './QueryView';
 
 const LEVEL_LABEL: Record<Level, string> = {
   none: 'None',
@@ -67,9 +69,9 @@ function dangerLine(danger: DangerResult<FinalFinding>): string {
   }
 }
 
-function Banner({ danger }: { danger: DangerResult<FinalFinding> }) {
+function Verdict({ danger }: { danger: DangerResult<FinalFinding> }) {
   return (
-    <div className={`banner ${danger.level} rv`} role="alert" style={rise(0)}>
+    <div className={`verdict ${danger.level} rv`} role="alert" style={rise(0)}>
       <span className={danger.level === 'high' ? 'tag pulse' : 'tag'}>
         <Meter level={danger.level} />
         Danger: {danger.level}
@@ -91,7 +93,7 @@ function FindingItem({ finding }: { finding: FinalFinding }) {
           <span className="tag-s">AI</span>
         )}
       </div>
-      {finding.reason}
+      <p>{finding.reason}</p>
       {!certain && (finding.assumption || finding.how_to_verify) && (
         <dl>
           {finding.assumption && (
@@ -110,33 +112,27 @@ function FindingItem({ finding }: { finding: FinalFinding }) {
   );
 }
 
-function CategoryCard({
-  title,
-  result,
-  index,
-}: {
-  title: string;
-  result: CategoryResult<FinalFinding>;
-  index: number;
-}) {
+function Category({ title, result }: { title: string; result: CategoryResult<FinalFinding> }) {
   const { level, findings } = result;
+  const count = findings.length;
   return (
-    <div className="card rv" style={rise(index)}>
+    <section className={`cat ${level}`}>
       <div className="cat-head">
-        <h2>{title}</h2>
+        <h3>{title}</h3>
+        <span className="count">
+          {count} {count === 1 ? 'finding' : 'findings'}
+        </span>
         <Badge level={level} />
       </div>
       {findings.map((f, i) => (
         <FindingItem key={i} finding={f} />
       ))}
-      {findings.length === 0 && (
-        <p className="empty">{level === 'none' ? 'No findings.' : 'No specific issue listed'}</p>
-      )}
-    </div>
+      {count === 0 && <p className="empty">{level === 'none' ? 'No findings.' : 'No specific issue listed'}</p>}
+    </section>
   );
 }
 
-function RewriteCard({ query, reason, index }: { query: string; reason: string; index: number }) {
+function CopyButton({ text }: { text: string }) {
   const [label, setLabel] = useState('Copy');
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   useEffect(() => () => clearTimeout(timer.current), []);
@@ -144,7 +140,7 @@ function RewriteCard({ query, reason, index }: { query: string; reason: string; 
   async function copy() {
     let next = 'Copied';
     try {
-      await navigator.clipboard.writeText(query);
+      await navigator.clipboard.writeText(text);
     } catch {
       next = "Couldn't copy";
     }
@@ -154,47 +150,103 @@ function RewriteCard({ query, reason, index }: { query: string; reason: string; 
   }
 
   return (
-    <div className="card rv" style={rise(index)}>
-      <div className="cat-head">
-        <h2>Rewritten query</h2>
-        <button type="button" className="btn-ghost small" onClick={() => void copy()}>
-          {label}
-        </button>
+    <button type="button" className="btn-ghost small" onClick={() => void copy()}>
+      {label}
+    </button>
+  );
+}
+
+type Highlight = (range: Range | null) => void;
+
+// Hover or focus a row to light up its part of the query.
+function hoverProps(onHighlight: Highlight, range: Range) {
+  const on = () => onHighlight(range);
+  const off = () => onHighlight(null);
+  return { tabIndex: 0, onMouseEnter: on, onMouseLeave: off, onFocus: on, onBlur: off };
+}
+
+function Steps({
+  analysis,
+  query,
+  onHighlight,
+  index,
+}: {
+  analysis: FinalAnalysis;
+  query: string;
+  onHighlight: Highlight;
+  index: number;
+}) {
+  const steps = analysis.step_by_step;
+  const ranges = useMemo(() => findInOrder(query, steps.map((s) => s.snippet)), [query, steps]);
+  const linked = ranges.some(Boolean);
+  return (
+    <div className="panel rv" style={rise(index)}>
+      <div className="panel-head">
+        <h2>Step by step</h2>
+        {linked && <p className="aside">Hover a part to find it in your query</p>}
       </div>
-      <pre className="code">
-        <code>{query}</code>
-      </pre>
-      {reason && <p className="muted">{reason}</p>}
+      <table className="steps">
+        <thead>
+          <tr>
+            <th className="part">Part</th>
+            <th>What it does</th>
+          </tr>
+        </thead>
+        <tbody>
+          {steps.map((s, i) => {
+            const r = ranges[i];
+            return (
+              <tr key={i} className={r ? 'linked' : undefined} {...(r ? hoverProps(onHighlight, r) : {})}>
+                <td>
+                  <code>{s.snippet}</code>
+                </td>
+                <td>{s.explanation}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
     </div>
   );
 }
 
-export function ResultView({ analysis }: { analysis: FinalAnalysis }) {
+interface Props {
+  analysis: FinalAnalysis;
+  // The query this result belongs to, for finding each step's part.
+  query?: string;
+  onHighlight?: Highlight;
+}
+
+const noop: Highlight = () => {};
+
+export function ResultView({ analysis, query = '', onHighlight = noop }: Props) {
   if (!analysis.is_query) {
     return (
-      <div className="card rv" style={rise(0)}>
+      <div className="panel rv" style={rise(0)}>
         <p>{analysis.not_a_query_message}</p>
       </div>
     );
   }
   const { query_type: qt } = analysis;
-  // Banner is 0 and "What it does" is 1; the rest count on from there.
+  const rewrite = analysis.rewritten_query.query.trim() !== '';
+  const tips = analysis.improvements;
+  // The verdict is 0 and "What it does" is 1; the rest count on from there.
   let i = 2;
   return (
     <>
-      <Banner danger={analysis.danger} />
+      <Verdict danger={analysis.danger} />
 
-      <div className="card rv" style={rise(1)}>
-        <h2>What it does</h2>
-        <div className="meta">
-          <span className="chip accent">{LANGUAGE_LABEL[qt.language]}</span>
-          <span className="chip">Confidence: {qt.confidence}</span>
-          {qt.dialect_note && <span className="chip">{qt.dialect_note}</span>}
+      <div className="panel rv" style={rise(1)}>
+        <div className="panel-head">
+          <h2>What it does</h2>
+          <div className="meta">
+            <span className="chip accent">{LANGUAGE_LABEL[qt.language]}</span>
+            <span className="chip">Confidence: {qt.confidence}</span>
+          </div>
         </div>
-        <p>{analysis.what_it_does}</p>
-        {analysis.simple_explanation && (
-          <p className="muted">In plain words: {analysis.simple_explanation}</p>
-        )}
+        {qt.dialect_note && <p className="note">{qt.dialect_note}</p>}
+        <p className="lead">{analysis.what_it_does}</p>
+        {analysis.simple_explanation && <p className="muted">In plain words: {analysis.simple_explanation}</p>}
         {analysis.detailed_explanation && (
           <details>
             <summary>Show the detailed explanation</summary>
@@ -204,52 +256,39 @@ export function ResultView({ analysis }: { analysis: FinalAnalysis }) {
       </div>
 
       {analysis.step_by_step.length > 0 && (
-        <div className="card rv" style={rise(i++)}>
-          <h2>Step by step</h2>
-          <table>
-            <thead>
-              <tr>
-                <th className="part">Part</th>
-                <th>What it does</th>
-              </tr>
-            </thead>
-            <tbody>
-              {analysis.step_by_step.map((s, i) => (
-                <tr key={i}>
-                  <td>
-                    <code>{s.snippet}</code>
-                  </td>
-                  <td>{s.explanation}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <Steps analysis={analysis} query={query} onHighlight={onHighlight} index={i++} />
       )}
 
-      <div className="cats">
-        <CategoryCard title="Security" result={analysis.security} index={i++} />
-        <CategoryCard title="Danger" result={analysis.danger} index={i++} />
-        <CategoryCard title="Performance" result={analysis.performance} index={i++} />
+      <div className="panel findings rv" style={rise(i++)}>
+        <h2>Findings</h2>
+        <Category title="Danger" result={analysis.danger} />
+        <Category title="Security" result={analysis.security} />
+        <Category title="Performance" result={analysis.performance} />
       </div>
 
-      {analysis.improvements.length > 0 && (
-        <div className="card rv" style={rise(i++)}>
-          <h2>Improvements</h2>
-          <ul>
-            {analysis.improvements.map((tip, i) => (
-              <li key={i}>{tip}</li>
-            ))}
-          </ul>
+      {(rewrite || tips.length > 0) && (
+        <div className="panel rv" style={rise(i++)}>
+          {rewrite ? (
+            <>
+              <div className="panel-head">
+                <h2>Rewritten query</h2>
+                <CopyButton text={analysis.rewritten_query.query} />
+              </div>
+              <Code text={analysis.rewritten_query.query} />
+              {analysis.rewritten_query.reason && <p className="muted">{analysis.rewritten_query.reason}</p>}
+              {tips.length > 0 && <h3 className="sub">Improvements</h3>}
+            </>
+          ) : (
+            <h2>Improvements</h2>
+          )}
+          {tips.length > 0 && (
+            <ul className="tips">
+              {tips.map((tip, k) => (
+                <li key={k}>{tip}</li>
+              ))}
+            </ul>
+          )}
         </div>
-      )}
-
-      {analysis.rewritten_query.query.trim() !== '' && (
-        <RewriteCard
-          query={analysis.rewritten_query.query}
-          reason={analysis.rewritten_query.reason}
-          index={i++}
-        />
       )}
     </>
   );
